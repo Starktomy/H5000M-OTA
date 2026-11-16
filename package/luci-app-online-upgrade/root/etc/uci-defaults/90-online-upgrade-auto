@@ -1,0 +1,4 @@
+#!/bin/sh
+# H5000M 定制客户端随固件内置。不从上游重装插件或恢复旧包清单。
+[ -x /usr/bin/online-upgrade ] || logger -t h5000m-ota '固件缺少 OTA 客户端，请重新安装完整固件'
+exit 0

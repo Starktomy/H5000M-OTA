@@ -1,0 +1,52 @@
+#!/bin/sh
+# 写入默认配置，并清理 v1（shell/lua 实现）遗留文件。
+
+# 仅在 settings 配置节尚不存在时写入中性默认值，
+# 避免软件包升级覆盖用户已有配置。
+# 注意：repo 与 firmware_pattern 刻意不写入默认值——更新源属于
+# 用户决策，需在 Web 界面配置（tag=latest 会自动追踪
+# 最新 Release）。
+if [ -z "$(uci -q get online-upgrade.settings)" ]; then
+	uci -q batch <<-EOF
+		set online-upgrade.settings.enabled='0'
+		set online-upgrade.settings.tag='latest'
+		set online-upgrade.settings.proxy='https://gh.acg2.mom/'
+		set online-upgrade.settings.keep_config='0'
+		set online-upgrade.settings.last_upgrade_version='0'
+		set online-upgrade.settings.dl_min_speed_kb='32'
+		set online-upgrade.settings.dl_slow_window_sec='15'
+		set online-upgrade.settings.dl_slow_grace_sec='10'
+		set online-upgrade.settings.plugin_repo='Starktomy/H5000M-OTA'
+		commit online-upgrade
+	EOF
+fi
+
+# ---- v2.6 新增配置：仅在字段缺失时补默认值，绝不覆盖用户已有配置 ----
+# 老用户升级后 settings 节已存在，上面的整块初始化不会执行，
+# 因此这里逐项补齐；所有取值都是中性默认，不改变原有升级行为。
+_set_default() {
+	[ -z "$(uci -q get online-upgrade.settings.$1)" ] || return 0
+	uci -q set "online-upgrade.settings.$1=$2"
+}
+_set_default repo_url ''
+_set_default build_branch ''
+_set_default workflow_filter ''
+_set_default api_via_proxy '0'
+_set_default api_timeout '25'
+_set_default ttl_actions '120'
+_set_default ttl_releases '300'
+_set_default ttl_artifacts '180'
+_set_default ttl_compat '600'
+_set_default ttl_network '60'
+uci -q commit online-upgrade
+
+# ---- 清理 v1 文件（shell 后端 / lua 控制器 / cbi / 旧版 js / cgi） ----
+rm -f /usr/bin/online-upgrade.sh
+rm -f /usr/lib/lua/luci/controller/admin_system/online_upgrade.lua
+rm -f /usr/lib/lua/luci/model/cbi/admin_system/online_upgrade.lua
+rm -f /www/luci-static/resources/view/system/online-upgrade.js
+rm -f /www/luci-static/resources/view/system/online-upgrade-log.js
+rm -f /www/luci-static/resources/view/system/online-upgrade-progress.js
+rm -f /www/cgi-bin/online-upgrade-restore
+
+exit 0

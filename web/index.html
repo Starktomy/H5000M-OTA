@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>H5000M 固件目录</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<header><p class="eyebrow">HIVETON H5000M / MT5700M</p><h1>固件版本目录</h1><p>在开源 mt76 与厂商 SDK 无线驱动之间选择，搭配你使用的模组管理方案。</p></header>
+<aside>同驱动＋同模组方案升级可选保留配置。跨驱动或跨方案必须清空配置；旧固件身份未知时也必须清空。这里提供固件下载，设备内的 OTA 页面负责执行升级。</aside>
+<form onsubmit="return false" aria-label="固件筛选">
+<label>无线驱动<select id="driver"><option value="mt76">开源 mt76</option><option value="mt_wifi7">厂商 SDK mt_wifi7（闭源无线）</option></select></label>
+<label>模组方案<select id="variant"><option value="qmodem-next">QModem Next</option><option value="qmodem">经典 QModem</option><option value="modem-pro">Modem Pro</option><option value="mt5700">MT5700</option><option value="mt5700m">MT5700M</option></select></label>
+<label>发布通道<select id="channel"><option value="development">日常构建 · 最近 3 版</option><option value="stable">稳定版 · 长期保存</option></select></label>
+</form>
+<p id="status" role="status">正在读取版本目录…</p><section id="releases" aria-label="可下载固件"></section>
+<footer><a href="https://github.com/Starktomy/H5000M-OTA">发布与使用说明</a><p>日常构建由 CI 自动生成，不代表完成了实机稳定性测试。稳定版经维护者验证后手动晋升，固件副本保存在 OTA 仓库。</p><p id="updated"></p></footer>
+</main><script src="app.js"></script></body></html>

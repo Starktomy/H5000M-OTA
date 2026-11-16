@@ -1,0 +1,32 @@
+name: Validate OTA
+on:
+  push:
+    branches: [main]
+    paths: [package/**, scripts/**, tests/**, .github/workflows/Validate.yml]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Catalog and upgrade policy tests
+        run: |
+          python3 -m unittest discover -s tests -p 'test_catalog.py' -v
+          node --test tests/test_frontend.cjs
+          node --check package/luci-app-online-upgrade/root/www/luci-static/resources/online-upgrade/app.js
+          python3 scripts/check_package.py
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: package/luci-app-online-upgrade/rust
+      - name: Rust backend regression tests
+        working-directory: package/luci-app-online-upgrade/rust
+        run: cargo test --locked
+      - name: Browser policy regression tests
+        run: python3 tests/browser_policy.py

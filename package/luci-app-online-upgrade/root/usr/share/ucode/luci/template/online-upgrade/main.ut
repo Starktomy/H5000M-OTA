@@ -1,0 +1,915 @@
+{% include('header') %}
+
+<!-- luci-app-online-upgrade v2 —— 现代纯白视觉风格 -->
+<link rel="stylesheet" href="{{ resource }}/online-upgrade/style.css?v=2.6.10-h5000m-r100">
+
+<div class="cbi-map ou-container">
+	<!-- 顶部主视觉横幅：定制矢量插画 -->
+	<div class="ou-hero-card">
+		<div class="ou-hero-content">
+			<div class="ou-hero-tags">
+				<span class="ou-hero-pill brand">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-hero-pill-icon"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+					ImmortalWrt / OpenWrt
+				</span>
+				<span class="ou-hero-pill version">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-hero-pill-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+					v2 极速在线升级
+				</span>
+			</div>
+			<h1 class="ou-hero-title">固件在线升级</h1>
+			<p class="ou-hero-desc">
+				选择开源或厂商无线驱动、模组方案与历史版本。同驱动同方案可选保留配置，跨驱动或方案升级将清空配置。
+			</p>
+			<div class="ou-hero-features">
+				<div class="ou-feature-item">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+					<span>多线程分段加速</span>
+				</div>
+				<div class="ou-feature-item">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+					<span>同方案可选保留配置</span>
+				</div>
+				<div class="ou-feature-item">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+					<span>全量快照本地灾备</span>
+				</div>
+			</div>
+		</div>
+
+		<!-- 定制科技感矢量 SVG 插画 -->
+		<div class="ou-hero-visual" aria-hidden="true">
+			<svg class="ou-hero-svg" viewBox="0 0 460 170" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<defs>
+					<linearGradient id="heroCardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+						<stop offset="0%" stop-color="#ffffff"/>
+						<stop offset="100%" stop-color="#f8fafc"/>
+					</linearGradient>
+					<linearGradient id="heroBlueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+						<stop offset="0%" stop-color="#3b82f6"/>
+						<stop offset="100%" stop-color="#1d4ed8"/>
+					</linearGradient>
+					<linearGradient id="heroCyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+						<stop offset="0%" stop-color="#06b6d4"/>
+						<stop offset="100%" stop-color="#3b82f6"/>
+					</linearGradient>
+					<linearGradient id="heroEmeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+						<stop offset="0%" stop-color="#10b981"/>
+						<stop offset="100%" stop-color="#059669"/>
+					</linearGradient>
+					<linearGradient id="heroLineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+						<stop offset="0%" stop-color="#93c5fd" stop-opacity="0.1"/>
+						<stop offset="50%" stop-color="#3b82f6" stop-opacity="0.8"/>
+						<stop offset="100%" stop-color="#93c5fd" stop-opacity="0.1"/>
+					</linearGradient>
+					<filter id="heroDrop" x="-10%" y="-10%" width="120%" height="130%" filterUnits="userSpaceOnUse">
+						<feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.06"/>
+					</filter>
+				</defs>
+
+				<!-- 背景电路网格 -->
+				<g opacity="0.5">
+					<line x1="40" y1="85" x2="420" y2="85" stroke="#e2e8f0" stroke-width="1.5" stroke-dasharray="6 6"/>
+					<line x1="90" y1="30" x2="90" y2="140" stroke="#e2e8f0" stroke-width="1"/>
+					<line x1="230" y1="20" x2="230" y2="150" stroke="#e2e8f0" stroke-width="1"/>
+					<line x1="380" y1="30" x2="380" y2="140" stroke="#e2e8f0" stroke-width="1"/>
+					<circle cx="90" cy="85" r="4" fill="#cbd5e1"/>
+					<circle cx="230" cy="85" r="4" fill="#93c5fd"/>
+					<circle cx="380" cy="85" r="4" fill="#cbd5e1"/>
+				</g>
+
+				<!-- 动态连接路径 -->
+				<path d="M 120 70 C 180 30, 240 30, 290 75" stroke="url(#heroLineGrad)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+				<path d="M 140 100 C 190 135, 250 130, 300 95" stroke="url(#heroCyanGrad)" stroke-width="2" stroke-dasharray="4 4" fill="none" opacity="0.6"/>
+
+				<!-- 云端更新源节点 -->
+				<g transform="translate(60, 42)" filter="url(#heroDrop)">
+					<circle cx="35" cy="35" r="32" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+					<circle cx="35" cy="35" r="26" fill="#eff6ff"/>
+					<path d="M26 40 a 6 6 0 0 1 -2 -11.6 a 10 10 0 0 1 19 -3.4 a 8 8 0 0 1 9 9 a 6 6 0 0 1 -4 6 z" fill="url(#heroBlueGrad)"/>
+					<path d="M35 31 v 8 m -3 -3 l 3 3 l 3 -3" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+					<circle cx="58" cy="18" r="4.5" fill="#10b981" stroke="#ffffff" stroke-width="1.5"/>
+				</g>
+
+				<!-- 数据流粒子 -->
+				<circle cx="195" cy="46" r="3" fill="#3b82f6"/>
+				<circle cx="240" cy="54" r="3.5" fill="#06b6d4"/>
+				<circle cx="215" cy="118" r="2.5" fill="#3b82f6" opacity="0.7"/>
+
+				<!-- 未来感路由器设备 -->
+				<g transform="translate(265, 45)" filter="url(#heroDrop)">
+					<path d="M 22 35 L 6 10" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+					<path d="M 88 35 L 104 10" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+					<path d="M 38 32 L 28 5" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round"/>
+					<path d="M 72 32 L 82 5" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round"/>
+
+					<!-- 信号弧线 -->
+					<path d="M 1 6 A 12 12 0 0 1 13 0" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+					<path d="M 97 0 A 12 12 0 0 1 109 6" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+					<!-- 机身外壳 -->
+					<rect x="15" y="32" width="80" height="36" rx="8" fill="url(#heroCardGrad)" stroke="#cbd5e1" stroke-width="1.5"/>
+					<rect x="20" y="37" width="70" height="26" rx="5" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+					<line x1="28" y1="56" x2="48" y2="56" stroke="#e2e8f0" stroke-width="1.5" stroke-linecap="round"/>
+
+					<!-- 状态指示灯 -->
+					<circle cx="58" cy="50" r="2.2" fill="#10b981"/>
+					<circle cx="66" cy="50" r="2.2" fill="#3b82f6"/>
+					<circle cx="74" cy="50" r="2.2" fill="#3b82f6"/>
+					<circle cx="82" cy="50" r="2.2" fill="#06b6d4"/>
+				</g>
+
+				<!-- 安全检查徽标 -->
+				<g transform="translate(385, 25)" filter="url(#heroDrop)">
+					<rect x="0" y="0" width="46" height="46" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+					<rect x="4" y="4" width="38" height="38" rx="9" fill="#ecfdf5"/>
+					<path d="M 23 12 L 15 16 V 23 C 15 28 18 32 23 34 C 28 32 31 28 31 23 V 16 Z" fill="url(#heroEmeraldGrad)"/>
+					<path d="M 20 23 L 22 25 L 26 21" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+				</g>
+
+				<!-- 速度标签 -->
+				<g transform="translate(330, 115)" filter="url(#heroDrop)">
+					<rect x="0" y="0" width="108" height="28" rx="14" fill="#ffffff" stroke="#dbeafe" stroke-width="1.2"/>
+					<circle cx="14" cy="14" r="6" fill="#eff6ff"/>
+					<polygon points="13 10 10 15 14 15 13 18 17 13 13 13" fill="#2563eb"/>
+					<text x="26" y="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="11" font-weight="600" fill="#1e40af">6x 并发分块</text>
+				</g>
+			</svg>
+		</div>
+	</div>
+
+	<!-- 1. 固件状态 -->
+	<div class="cbi-section ou-card" id="card-h5000m-ota">
+		<div class="ou-card-head"><div><h3>H5000M 固件版本</h3><p class="ou-head-sub" id="ota-current">正在读取当前驱动与方案…</p></div></div>
+		<p>日常构建按驱动 × 模组方案各保留最近 3 版；稳定版长期保存。</p>
+		<div class="ou-adv-grid">
+			<div class="ou-form-field"><label for="ota-driver">无线驱动</label><select id="ota-driver" class="ou-input-text"></select></div>
+			<div class="ou-form-field"><label for="ota-variant">模组方案</label><select id="ota-variant" class="ou-input-text"></select></div>
+			<div class="ou-form-field"><label for="ota-channel">发布通道</label><select id="ota-channel" class="ou-input-text"><option value="development">日常构建</option><option value="stable">稳定版</option></select></div>
+			<div class="ou-form-field"><label for="ota-version">构建版本</label><select id="ota-version" class="ou-input-text"></select></div>
+		</div>
+		<p id="ota-detail"></p>
+		<p><a id="ota-release" target="_blank" rel="noopener noreferrer" hidden>查看发布说明</a></p>
+		<label><input type="checkbox" id="ota-keep" disabled> 保留配置（仅同驱动＋同模组方案）</label>
+		<p class="ou-field-help" id="ota-keep-note">跨驱动或跨模组方案必须清空配置。</p>
+		<div class="ou-input-row"><button type="button" class="btn ou-btn ou-btn-primary" id="ota-apply" disabled>应用此版本并检查</button><button type="button" class="btn ou-btn ou-btn-default" id="ota-refresh">刷新版本目录</button></div>
+		<p id="ota-note" role="status" aria-live="polite"></p>
+	</div>
+
+	<div class="cbi-section ou-card" id="card-status">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge blue">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>固件状态与版本检测</h3>
+						<span class="ou-status-pill ok" id="status-badge"><span class="ou-dot ok"></span> 就绪</span>
+					</div>
+					<p class="ou-head-sub">实时对比路由器当前内核与云端 Release 目标固件产物</p>
+				</div>
+			</div>
+			<div class="ou-btn-row">
+				<button id="btn-check" class="btn ou-btn ou-btn-primary" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+					<span class="btn-label">检查更新</span>
+				</button>
+				<button id="btn-upgrade" class="btn ou-btn ou-btn-success ou-btn-sparkle is-hidden" type="button" style="display:none">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+					<span class="btn-label">立即升级</span>
+				</button>
+				<button id="btn-force" class="btn ou-btn ou-btn-danger is-hidden" type="button" title="即使已是最新版本也重新下载刷写" style="display:none">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+					<span class="btn-label">重装 / 切换版本</span>
+				</button>
+			</div>
+		</div>
+
+		<!-- 三项统计指标卡片 -->
+		<div class="ou-stat-grid">
+			<div class="ou-stat-card">
+				<div class="ou-stat-icon-wrap">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-stat-icon"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+				</div>
+				<div class="ou-stat-meta">
+					<span class="ou-stat-label">当前运行版本</span>
+					<span class="ou-stat-val" id="cur-ver">加载中...</span>
+					<span class="ou-stat-sub" id="cur-device-sub">本机系统固件环境</span>
+				</div>
+			</div>
+			<div class="ou-stat-card">
+				<div class="ou-stat-icon-wrap">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-stat-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+				</div>
+				<div class="ou-stat-meta">
+					<div class="ou-stat-label-row">
+						<span class="ou-stat-label">云端最新固件</span>
+						<span class="ou-ver-badge" id="new-ver">—</span>
+					</div>
+					<span class="ou-stat-val" id="latest-name" title="目标固件产物">—</span>
+					<span class="ou-stat-sub" id="latest-compat-badge">目标 Release 适配产物</span>
+				</div>
+			</div>
+			<div class="ou-stat-card">
+				<div class="ou-stat-icon-wrap">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-stat-icon"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+				</div>
+				<div class="ou-stat-meta">
+					<span class="ou-stat-label">固件规格与发布时间</span>
+					<span class="ou-stat-val">
+						<span id="latest-size">—</span>
+						<span class="ou-sep">/</span>
+						<span id="latest-time">—</span>
+					</span>
+					<span class="ou-stat-sub" id="latest-hash-status">SHA256 &amp; 文件大小校验</span>
+				</div>
+			</div>
+		</div>
+
+		<!-- 检测依据：结论 + 关键事实 + 可展开证据链，替代原先挤在一行的标签流 -->
+		<div class="ou-evidence" id="check-evidence">
+			<div class="ou-evidence-head">
+				<div class="ou-evidence-heading">
+					<span class="ou-evidence-kicker">检测依据与判定规则</span>
+					<h4 class="ou-evidence-title">本机适配与版本判定</h4>
+				</div>
+				<div class="ou-evidence-status">
+					<span class="ou-evidence-state" id="evidence-state">待检测</span>
+					<a href="#" id="evidence-release-link" class="ou-evidence-link is-hidden" target="_blank" rel="noopener">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-evidence-link-svg"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+						<span>Release 发布页</span>
+					</a>
+				</div>
+			</div>
+			<p class="ou-evidence-verdict" id="evidence-verdict">尚未执行检测。点击右上角「检查更新」后，这里会给出结论与完整证据链。</p>
+			<div class="ou-evidence-chips" id="evidence-chips"></div>
+			<button type="button" class="ou-evidence-toggle" id="evidence-toggle" aria-expanded="false">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-evidence-toggle-svg"><polyline points="9 18 15 12 9 6"/></svg>
+				<span>展开判定详情</span>
+			</button>
+			<div class="ou-evidence-facts" id="evidence-facts"></div>
+			<details class="ou-evidence-detail is-hidden" id="evidence-detail">
+				<summary class="ou-evidence-summary">
+					<span class="ou-evidence-summary-left">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-evidence-chevron"><polyline points="9 18 15 12 9 6"/></svg>
+						<span>完整判定依据</span>
+					</span>
+					<span class="ou-detail-count" id="evidence-basis-count">0 条</span>
+				</summary>
+				<ol class="ou-basis-list" id="evidence-basis"></ol>
+				<p class="ou-evidence-note">三通道判定：机型（本机 board 标识与资产机型逐段比对）、架构（资产声明架构与本机架构比对）、版本（tag 与资产名解析后比较）。任一通道未通过都会在结论中说明，不会用“通用固件”兜底。</p>
+			</details>
+		</div>
+
+		<!-- 检查结果提示框 -->
+		<div class="ou-notice-box" id="check-result-box">
+			<div class="ou-notice-icon-wrap">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-notice-svg"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+			</div>
+			<p class="ou-hint" id="check-result">点击「检查更新」检测 GitHub 是否有新固件</p>
+		</div>
+
+		<!-- 下载任务（与固件状态合并） -->
+		<div class="ou-subsection">
+			<div class="ou-subsection-head">
+				<div class="ou-subsection-title">
+					<h4>下载任务</h4>
+					<span class="ou-subsection-sub">开始 / 暂停 / 继续 / 取消；完成后自动清理任务与安装包</span>
+				</div>
+				<div class="ou-btn-row">
+					<button id="btn-start-download" class="btn ou-btn ou-btn-primary" type="button" title="仅下载并校验固件，不执行刷写">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+					<span class="btn-label">开始下载</span>
+					</button>
+					<button id="btn-pause-download" class="btn ou-btn ou-btn-default" type="button" title="在下一个分块边界暂停">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+					<span class="btn-label">暂停</span>
+					</button>
+					<button id="btn-resume-download" class="btn ou-btn ou-btn-default" type="button" title="继续已暂停的下载">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+					<span class="btn-label">继续</span>
+					</button>
+					<button id="btn-cancel-download" class="btn ou-btn ou-btn-danger" type="button" title="取消当前下载，保留断点续传记录">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+					<span class="btn-label">取消</span>
+					</button>
+				</div>
+			</div>
+			<div class="ou-table-responsive">
+			<table class="ou-table" id="task-table">
+			<thead>
+			<tr>
+			<th>文件 / 任务</th>
+			<th>状态 / 进度</th>
+			<th>速度</th>
+			<th>原因 / 备注</th>
+			<th style="width:100px;text-align:right">操作</th>
+			</tr>
+			</thead>
+			<tbody>
+			<tr><td colspan="5" class="ou-empty">暂无下载任务</td></tr>
+			</tbody>
+			</table>
+			</div>
+			<p class="ou-hint" id="task-hint"></p>
+		</div>
+	</div>
+
+	<!-- 1b. 远程状态与统一诊断（四套独立状态模型，v2.6） -->
+	<div class="cbi-section ou-card" id="card-states">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge violet">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3 class="ou-head-title">远程状态与统一诊断</h3>
+						<span class="ou-status-pill" id="st-freshness-pill"><span class="ou-dot"></span> 未加载</span>
+					</div>
+					<p class="ou-head-sub">Actions / Releases / Artifacts / 固件兼容性四套状态各自独立，由诊断层汇总解释</p>
+				</div>
+			</div>
+			<div class="ou-head-actions">
+				<button id="btn-states-refresh" class="btn ou-btn ou-btn-primary" type="button" title="刷新四套状态模型（重新查询 GitHub）">刷新状态</button>
+				<button id="btn-states-reload" class="btn ou-btn ou-btn-default" type="button" title="仅读取缓存，不发起网络请求">读取缓存</button>
+			</div>
+		</div>
+
+		<!-- 诊断结论：置于最前，最重要 -->
+		<div class="ou-st-diag" id="st-diag" data-severity="unknown">
+			<div class="ou-st-diag-head">
+				<span class="ou-st-diag-badge" id="st-diag-severity">未知</span>
+				<span class="ou-st-diag-summary" id="st-diag-summary">正在读取状态...</span>
+			</div>
+			<div class="ou-st-diag-body" id="st-diag-body"></div>
+		</div>
+
+		<!-- 四套独立状态模型 -->
+		<div class="ou-st-grid">
+			<section class="ou-st-panel" id="st-panel-actions">
+				<div class="ou-st-panel-head"><h4>① 远程构建状态 · Actions</h4><span class="ou-st-state" data-state="not_checked" id="st-actions-state">未检测</span></div>
+				<div class="ou-st-panel-body" id="st-actions-body"><p class="ou-st-empty">尚未查询 GitHub Actions 构建状态</p></div>
+			</section>
+			<section class="ou-st-panel" id="st-panel-releases">
+				<div class="ou-st-panel-head"><h4>② 正式发布状态 · Releases</h4><span class="ou-st-state" data-state="not_checked" id="st-releases-state">未检测</span></div>
+				<div class="ou-st-panel-body" id="st-releases-body"><p class="ou-st-empty">尚未查询 GitHub Releases</p></div>
+			</section>
+			<section class="ou-st-panel" id="st-panel-artifacts">
+				<div class="ou-st-panel-head"><h4>③ 临时构建产物 · Artifacts</h4><span class="ou-st-state" data-state="not_checked" id="st-artifacts-state">未检测</span></div>
+				<div class="ou-st-panel-body" id="st-artifacts-body"><p class="ou-st-empty">尚未查询 Actions Artifacts</p></div>
+			</section>
+			<section class="ou-st-panel" id="st-panel-compat">
+				<div class="ou-st-panel-head"><h4>④ 固件兼容性 · Compat</h4><span class="ou-st-state" data-state="not_checked" id="st-compat-state">未检测</span></div>
+				<div class="ou-st-panel-body" id="st-compat-body"><p class="ou-st-empty">尚未执行兼容性检查</p></div>
+			</section>
+		</div>
+
+		<!-- 设备信息 -->
+		<section class="ou-st-device">
+			<div class="ou-st-panel-head"><h4>设备信息（动态采集）</h4><span class="ou-st-state" data-state="ok" id="st-device-state">加载中</span></div>
+			<div class="ou-st-panel-body" id="st-device-body"><p class="ou-st-empty">正在读取设备信息...</p></div>
+		</section>
+
+		<!-- 网络与线路策略 -->
+		<section class="ou-st-network">
+			<div class="ou-st-panel-head"><h4>网络与请求策略</h4><span class="ou-st-state" data-state="not_checked" id="st-network-state">未检测</span></div>
+			<div class="ou-st-panel-body" id="st-network-body"><p class="ou-st-empty">尚未执行网络连通性检测</p></div>
+		</section>
+
+		<div class="ou-st-tools">
+			<button id="btn-probe-repo" class="btn ou-btn ou-btn-default" type="button" title="校验当前配置的仓库地址并自动发现默认分支与公开 Workflow">校验仓库</button>
+			<button id="btn-netcheck" class="btn ou-btn ou-btn-default" type="button" title="真实 HTTP 探测 GitHub API 连通性与线路状态">网络检测</button>
+			<button id="btn-clear-states" class="btn ou-btn ou-btn-default" type="button" title="清空四套状态模型与网络缓存，不影响固件、任务与日志">清空状态缓存</button>
+		</div>
+
+		<p class="ou-hint" id="states-hint">四套状态各自独立缓存与刷新；API 故障不会覆盖已获取的真实状态。</p>
+	</div>
+
+	<!-- 2. 升级进度 -->
+	<div class="cbi-section ou-card ou-card-progress" id="card-progress" style="display:none">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge cyan">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>固件升级进行中</h3>
+						<span class="ou-status-pill update">
+							<span class="ou-dot update"></span> 执行中
+						</span>
+					</div>
+					<p class="ou-head-sub">系统正在安全调度中，请保持路由器电源稳定连接，切勿断电</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- 升级流程步骤条 -->
+		<div class="ou-step-pipeline">
+			<div class="ou-step-node" id="step-env">
+				<div class="ou-step-circle">1</div>
+				<span class="ou-step-text">环境预检</span>
+			</div>
+			<div class="ou-step-line"></div>
+			<div class="ou-step-node" id="step-dl">
+				<div class="ou-step-circle">2</div>
+				<span class="ou-step-text">分段下载</span>
+			</div>
+			<div class="ou-step-line"></div>
+			<div class="ou-step-node" id="step-backup">
+				<div class="ou-step-circle">3</div>
+				<span class="ou-step-text">配置备份</span>
+			</div>
+			<div class="ou-step-line"></div>
+			<div class="ou-step-node" id="step-flash">
+				<div class="ou-step-circle">4</div>
+				<span class="ou-step-text">刷写重启</span>
+			</div>
+		</div>
+
+		<!-- 进度条轨道 -->
+		<div class="ou-progress-wrap">
+			<div class="ou-progress-track">
+				<div class="ou-progress-bar" id="progress-bar" style="width:0%">
+					<div class="ou-progress-shimmer"></div>
+				</div>
+				<div class="ou-progress-label" id="progress-pct">0%</div>
+			</div>
+		</div>
+		<div class="ou-progress-info">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-info-icon"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+			<span class="ou-hint" id="progress-text">正在启动升级流程...</span>
+		</div>
+	</div>
+
+	<!-- 3. 备份与恢复 -->
+	<div class="cbi-section ou-card" id="card-backup">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge amber">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>配置备份与灾备恢复</h3>
+					</div>
+					<p class="ou-head-sub">升级前后自动快照 /root/ 目录，支持打包下载及随时上传历史配置还原</p>
+				</div>
+			</div>
+			<div class="ou-btn-row">
+				<button id="btn-backup" class="btn ou-btn ou-btn-default" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+					<span class="btn-label">创建备份</span>
+				</button>
+				<button id="btn-download" class="btn ou-btn ou-btn-default" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+					<span class="btn-label">下载备份</span>
+				</button>
+				<button id="btn-auto-restore" class="btn ou-btn ou-btn-default" type="button" title="从路由器本地最新备份恢复">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+					<span class="btn-label">自动恢复</span>
+				</button>
+				<button id="btn-manual-restore" class="btn ou-btn ou-btn-default" type="button" title="上传本地备份文件恢复">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+					<span class="btn-label">手动恢复</span>
+				</button>
+				<input type="file" id="manual-backup-file" accept=".tar.gz,.tgz,.gz" style="display:none">
+			</div>
+		</div>
+
+		<div class="ou-table-responsive">
+			<table class="ou-table" id="backup-table">
+				<thead>
+					<tr>
+						<th>备份文件</th>
+						<th>文件大小</th>
+						<th>创建时间</th>
+						<th style="width:100px;text-align:right">操作</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr><td colspan="4" class="ou-empty">暂无备份</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<p class="ou-hint" id="backup-hint"></p>
+	</div>
+
+	<!-- 4. 仓库配置 -->
+	<div class="cbi-section ou-card" id="card-config">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge violet">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>下载与高级设置</h3>
+					</div>
+					<p class="ou-head-sub">固件目标由上方目录管理，可在此调整下载线路和性能</p>
+				</div>
+			</div>
+		</div>
+
+		<div class="ou-config-steps">
+			<!-- 步骤 1 -->
+			<div class="ou-form-card">
+				<div class="ou-step-badge-row">
+					<span class="ou-step-number">1</span>
+					<label class="ou-step-label" for="cfg-url">固件更新源识别</label>
+				</div>
+				<p class="ou-field-help">支持粘贴 GitHub Release 页面链接、仓库主页链接，或直接填写 <code>owner/repo</code>：</p>
+				<div class="ou-input-group">
+					<div class="ou-input-wrap">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-input-svg"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+						<input type="text" id="cfg-url" class="ou-input-text" placeholder="例: https://github.com/owner/repo/releases/tag/xxx" spellcheck="false">
+					</div>
+					<button id="btn-parse-url" class="btn ou-btn ou-btn-default" type="button">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+						<span class="btn-label">识别并填入</span>
+					</button>
+				</div>
+			</div>
+
+			<!-- 步骤 2 -->
+			<div class="ou-form-card">
+				<div class="ou-step-badge-row">
+					<span class="ou-step-number">2</span>
+					<label class="ou-step-label">选择目标固件文件</label>
+				</div>
+				<p class="ou-field-help">实时拉取该仓库最新 Release 产物附件（已自动过滤小于 15MB 的非固件小文件），点选固件文件即可全自动生成匹配正则：</p>
+				<div class="ou-input-group">
+					<button id="btn-fetch-assets" class="btn ou-btn ou-btn-default" type="button">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+						<span class="btn-label">获取固件列表</span>
+					</button>
+					<span class="ou-resolved-tag" id="asset-resolved"></span>
+				</div>
+				<div id="asset-box" class="ou-asset-box" style="display:none">
+					<div class="ou-asset-select-row">
+						<select id="cfg-asset" class="ou-input-select"></select>
+						<button id="btn-apply-asset" class="btn ou-btn ou-btn-primary" type="button">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="20 6 9 17 4 12"/></svg>
+							<span class="btn-label">使用此文件 → 生成规则</span>
+						</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- 步骤 3 -->
+			<div class="ou-form-card">
+				<div class="ou-step-badge-row">
+					<span class="ou-step-number">3</span>
+					<label class="ou-step-label" for="cfg-proxy">下载加速代理</label>
+				</div>
+				<p class="ou-field-help">加速 GitHub Releases 固件下载，国内网络环境强烈推荐启用。下列节点均已于 2026-11-10 实测可正常代理文件下载：</p>
+				<div class="ou-input-wrap">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-input-svg"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+					<input type="text" id="cfg-proxy" class="ou-input-text" placeholder="https://gh.acg2.mom/ (留空直连 GitHub)" spellcheck="false">
+				</div>
+				<div class="ou-proxy-quick-pills">
+					<span class="ou-pill-title">可用节点:</span>
+					<button type="button" class="ou-quick-pill" data-proxy="https://gh.acg2.mom/">gh.acg2.mom</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://ghfast.top/">ghfast.top</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://ghproxy.net/">ghproxy.net</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://gh-proxy.com/">gh-proxy.com</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://ghproxy.imciel.com/">imciel.com</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://ghproxy.monkeyray.net/">monkeyray.net</button>
+					<button type="button" class="ou-quick-pill" data-proxy="https://ghproxy.vip/">ghproxy.vip</button>
+					<button type="button" class="ou-quick-pill" data-proxy="">直连 GitHub</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- 配置摘要栏 -->
+		<div class="ou-config-summary-card">
+			<div class="ou-summary-icon">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+			</div>
+			<div class="ou-summary-text" id="config-summary">尚未配置固件源</div>
+		</div>
+
+		<!-- 高级设置折叠面板 -->
+		<details id="adv-box" class="ou-details">
+			<summary class="ou-summary">
+				<div class="ou-summary-left">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-chevron-svg"><polyline points="9 18 15 12 9 6"/></svg>
+					<span>高级配置 (仓库、标签模式、匹配规则及多线程下载调优)</span>
+				</div>
+				<span class="ou-badge-tune">可选参数</span>
+			</summary>
+			<div class="ou-adv-grid">
+				<div class="ou-form-field">
+					<label for="cfg-repo">GitHub 仓库 (owner/repo)</label>
+					<input type="text" id="cfg-repo" class="ou-input-text" placeholder="owner/repo" spellcheck="false">
+				</div>
+				<div class="ou-form-field ou-field-full">
+					<label for="cfg-repo-url">通用仓库地址（可选，优先于上方 owner/repo）</label>
+					<input type="text" id="cfg-repo-url" class="ou-input-text" placeholder="https://github.com/owner/repo 或 owner/repo" spellcheck="false">
+					<p class="ou-field-help">支持完整 GitHub URL、<code>/tree/分支</code>、<code>.git</code>；留空则沿用上方「GitHub 仓库」</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-build-branch">Actions 构建分支筛选（可选）</label>
+					<input type="text" id="cfg-build-branch" class="ou-input-text" placeholder="留空跟随仓库默认分支" spellcheck="false">
+					<p class="ou-field-help">仅筛选 Actions 运行记录，不影响 Release 资产检测</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-workflow-filter">Actions Workflow 名称筛选（可选）</label>
+					<input type="text" id="cfg-workflow-filter" class="ou-input-text" placeholder="留空显示全部工作流" spellcheck="false">
+					<p class="ou-field-help">按名称子串筛选公开工作流，不写死任何 Workflow 名称</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-tag">Release 标签追踪策略</label>
+					<input type="text" id="cfg-tag" class="ou-input-text" placeholder="latest / latest@^前缀 / 指定 tag" spellcheck="false">
+					<p class="ou-field-help">支持 <code>latest</code> 追最新，或 <code>latest@^前缀</code> 过滤特定分支标签</p>
+				</div>
+				<div class="ou-form-field ou-field-full">
+					<label for="cfg-pattern">固件文件名匹配正则</label>
+					<input type="text" id="cfg-pattern" class="ou-input-text font-mono" placeholder="例: ^.*-sysupgrade\.bin$" spellcheck="false">
+					<p class="ou-field-help">grep -E 正则表达式，匹配「文件名」；留空则仅按结构化比对（机型 / 架构 / 版本）判定，不猜第一个</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-minsize">最小固件体积 (MB)</label>
+					<input type="number" id="cfg-minsize" class="ou-input-text" min="0" max="512" step="1" placeholder="15">
+					<p class="ou-field-help">过滤 manifest/sha256 等小文件，0 为不限制，默认 15 MB</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-keep-config">升级时保留配置</label>
+					<select id="cfg-keep-config" class="ou-input-text" disabled>
+						<option value="0">清空配置（默认）</option>
+						<option value="1">保留同方案配置</option>
+					</select>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-api-via-proxy">GitHub API 走加速源</label>
+					<select id="cfg-api-via-proxy" class="ou-input-text">
+						<option value="0">否（直连 api.github.com）</option>
+						<option value="1">是</option>
+					</select>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-api-timeout">API 超时（秒）</label>
+					<input type="number" id="cfg-api-timeout" class="ou-input-text" min="5" max="120" step="1">
+				</div>
+				<div class="ou-form-field">
+					<label>状态缓存 TTL（秒）</label>
+					<div class="ou-ttl-grid">
+						<input type="number" id="cfg-ttl-actions" class="ou-input-text" min="15" step="1" placeholder="Actions 120">
+						<input type="number" id="cfg-ttl-releases" class="ou-input-text" min="15" step="1" placeholder="Releases 300">
+						<input type="number" id="cfg-ttl-artifacts" class="ou-input-text" min="15" step="1" placeholder="Artifacts 180">
+						<input type="number" id="cfg-ttl-compat" class="ou-input-text" min="15" step="1" placeholder="Compat 600">
+						<input type="number" id="cfg-ttl-network" class="ou-input-text" min="15" step="1" placeholder="Network 60">
+					</div>
+					<p class="ou-field-help">四套状态模型与网络探测的独立缓存时长</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-token">GitHub Personal Token</label>
+					<div class="ou-input-row">
+						<input type="password" id="cfg-token" class="ou-input-text" placeholder="可选，突破匿名 API 60次/小时限制" autocomplete="off">
+						<button type="button" id="btn-toggle-token" class="btn ou-btn ou-btn-default" title="切换明文/掩码显示">显示</button>
+					</div>
+					<p class="ou-field-help">已保存的 Token 会回填到此处（默认掩码）；留空并保存会清除已存 Token。</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-expected-sha256">自定义 SHA256 校验值 (可选)</label>
+					<input type="text" id="cfg-expected-sha256" class="ou-input-text" placeholder="留空则自动从 Release 校验清单或说明中提取" spellcheck="false">
+					<p class="ou-field-help">支持自定义固件 SHA256 哈希值；升级前会自动校验，不匹配将拒绝刷写以保护设备</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-workers">多线程下载并发数</label>
+					<input type="number" id="cfg-workers" class="ou-input-text" min="1" max="16" step="1" placeholder="6">
+					<p class="ou-field-help">分段并发 worker 连接数 (1 为单流)，默认 6</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-chunk">动态分块大小 (MB)</label>
+					<input type="number" id="cfg-chunk" class="ou-input-text" min="1" max="32" step="1" placeholder="4">
+					<p class="ou-field-help">每个 Range 工作分片单元大小，默认 4 MB</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-stall">停滞超时判定 (秒)</label>
+					<input type="number" id="cfg-stall" class="ou-input-text" min="5" max="600" step="1" placeholder="30">
+					<p class="ou-field-help">连接无数据超过该秒数即触发看门狗并重试，默认 30 秒</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-retries">单块最大重试次数</label>
+					<input type="number" id="cfg-retries" class="ou-input-text" min="1" max="10" step="1" placeholder="3">
+					<p class="ou-field-help">单个分片下载失败后最大自动重试次数，默认 3 次</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-minspeed">最低可接受速度 (KB/s)</label>
+					<input type="number" id="cfg-minspeed" class="ou-input-text" min="0" max="10240" step="1" placeholder="32">
+					<p class="ou-field-help">持续低于该速度会自动停止下载并输出原因；0 表示关闭慢速保护，默认 32 KB/s</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-slowwin">慢速判定窗口 (秒)</label>
+					<input type="number" id="cfg-slowwin" class="ou-input-text" min="3" max="300" step="1" placeholder="15">
+					<p class="ou-field-help">速度连续低于阈值达到该时长才判定为异常，默认 15 秒</p>
+				</div>
+				<div class="ou-form-field">
+					<label for="cfg-slowgrace">启动宽限期 (秒)</label>
+					<input type="number" id="cfg-slowgrace" class="ou-input-text" min="0" max="300" step="1" placeholder="10">
+					<p class="ou-field-help">TLS 握手与 TCP 慢启动期间不做慢速判定，默认 10 秒</p>
+				</div>
+			</div>
+		</details>
+
+		<!-- 卡片底部操作区 -->
+		<div class="ou-card-foot">
+			<div class="ou-hint" id="config-hint"></div>
+			<button id="btn-save-config" class="btn ou-btn ou-btn-primary" type="button">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="20 6 9 17 4 12"/></svg>
+				<span class="btn-label">保存配置</span>
+			</button>
+		</div>
+	</div>
+
+	<!-- 4.5 插件自身版本与更新（位于仓库配置之后，默认折叠） -->
+	<div class="cbi-section ou-card ou-card-plugin ou-card-collapsed" id="card-plugin" hidden>
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge indigo">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>插件版本与自我更新</h3>
+						<span class="ou-status-pill ok" id="plugin-badge"><span class="ou-dot ok"></span> 就绪</span>
+					</div>
+					<p class="ou-head-sub">独立于固件升级：按统一发布清单校验架构与 SHA256 后，原地更新 luci-app-online-upgrade，不触碰系统固件</p>
+				</div>
+			</div>
+			<div class="ou-btn-row">
+				<button id="btn-plugin-check" class="btn ou-btn ou-btn-default" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+					<span class="btn-label">检查插件更新</span>
+				</button>
+				<button id="btn-plugin-update" class="btn ou-btn ou-btn-success is-hidden" type="button" disabled>
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+					<span class="btn-label">更新插件</span>
+				</button>
+				<button id="btn-plugin-reload" class="btn ou-btn ou-btn-primary is-hidden" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+					<span class="btn-label">刷新页面</span>
+				</button>
+			</div>
+		</div>
+
+		<button type="button" class="ou-plugin-toggle" id="plugin-toggle" aria-expanded="false">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-plugin-toggle-svg"><polyline points="9 18 15 12 9 6"/></svg>
+			<span>展开插件更新</span>
+		</button>
+
+		<div class="ou-plugin-body">
+			<div class="ou-plugin-meta">
+				<div class="ou-plugin-row">
+					<span class="ou-plugin-key">当前插件版本</span>
+					<span class="ou-plugin-val" id="plugin-current">读取中...</span>
+				</div>
+				<div class="ou-plugin-row">
+					<span class="ou-plugin-key">云端最新版本</span>
+					<span class="ou-plugin-val" id="plugin-latest">—</span>
+				</div>
+				<div class="ou-plugin-row">
+					<span class="ou-plugin-key">运行环境</span>
+					<span class="ou-plugin-val" id="plugin-env">—</span>
+				</div>
+				<div class="ou-plugin-row">
+					<span class="ou-plugin-key">最近检查</span>
+					<span class="ou-plugin-val" id="plugin-checked">—</span>
+				</div>
+			</div>
+
+			<div class="ou-plugin-detail">
+				<div class="ou-plugin-asset" id="plugin-asset">尚未检查。<br><span class="ou-plugin-asset-sub">会读取固定仓库的稳定 Release，并按 manifest 选择与本机架构匹配的安装包。</span></div>
+				<div class="ou-plugin-progress" id="plugin-progress" style="display:none">
+					<div class="ou-plugin-progress-track"><div class="ou-plugin-progress-bar" id="plugin-progress-bar" style="width:0%"></div></div>
+					<span class="ou-plugin-progress-pct" id="plugin-progress-pct">0%</span>
+				</div>
+				<p class="ou-plugin-hint" id="plugin-hint">点击「检查插件更新」比对当前安装版本与最新稳定 Release。</p>
+			</div>
+		</div>
+
+		<details class="ou-plugin-convention">
+			<summary class="ou-plugin-convention-summary">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-evidence-chevron"><polyline points="9 18 15 12 9 6"/></svg>
+				<span>发布标签与产物命名规范（自更新依赖）</span>
+			</summary>
+			<div class="ou-convention-grid">
+				<div class="ou-convention-item"><span class="ou-convention-key">Release 标签</span><code>v&lt;MAJOR&gt;.&lt;MINOR&gt;.&lt;PATCH&gt;</code><span class="ou-convention-note">例：v2.5.0；预发布与日期标签不会被自更新采用</span></div>
+				<div class="ou-convention-item"><span class="ou-convention-key">安装包</span><code>luci-app-online-upgrade_&lt;版本&gt;-r&lt;发布号&gt;_&lt;架构&gt;.apk</code><span class="ou-convention-note">例：luci-app-online-upgrade_2.5.0-r1_aarch64_cortex-a53.apk</span></div>
+				<div class="ou-convention-item"><span class="ou-convention-key">机器清单</span><code>online-upgrade-manifest.json</code><span class="ou-convention-note">固定文件名，声明版本、架构、文件大小与 SHA256</span></div>
+				<div class="ou-convention-item"><span class="ou-convention-key">校验清单</span><code>SHA256SUMS</code><span class="ou-convention-note">manifest 缺失时的兜底校验来源，仍然拒绝无校验安装</span></div>
+			</div>
+		</details>
+	</div>
+
+	<!-- 5. 运行日志 -->
+	<div class="cbi-section ou-card" id="card-log">
+		<div class="ou-card-head">
+			<div class="ou-head-title-wrap">
+				<div class="ou-icon-badge slate">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-head-icon"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+				</div>
+				<div>
+					<div class="ou-head-title-row">
+						<h3>运行日志</h3>
+					</div>
+					<p class="ou-head-sub">实时查看后端 Tokio 多线程分段下载与升级调度日志（自动限制内存占用 ≤ 2MB，支持随时清空）</p>
+				</div>
+			</div>
+			<div class="ou-btn-row">
+				<button id="btn-clear-log" class="btn ou-btn ou-btn-default" type="button" title="清空当前日志文件">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+					<span class="btn-label">清空日志</span>
+				</button>
+				<button id="btn-refresh-log" class="btn ou-btn ou-btn-default" type="button">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+					<span class="btn-label">刷新日志</span>
+				</button>
+			</div>
+		</div>
+
+		<!-- 终端风格日志窗口 -->
+		<div class="ou-terminal-window">
+			<div class="ou-terminal-titlebar">
+				<div class="ou-terminal-dots">
+					<span class="ou-dot red"></span>
+					<span class="ou-dot yellow"></span>
+					<span class="ou-dot green"></span>
+				</div>
+				<span class="ou-terminal-title">/tmp/online-upgrade.log</span>
+				<div class="ou-terminal-spacer"></div>
+				<span class="ou-terminal-limit-badge">内存上限 2MB</span>
+			</div>
+			<div class="ou-terminal ou-log" id="log-view"><div class="ou-log-empty">日志加载中...</div></div>
+		</div>
+	</div>
+</div>
+
+<!-- 重启遮罩 -->
+<div id="reboot-overlay" class="ou-overlay" style="display:none">
+	<div class="ou-reboot-card">
+		<div class="ou-reboot-graphic">
+			<svg class="ou-reboot-svg" viewBox="0 0 120 120">
+				<circle class="ou-ring ou-ring-1" cx="60" cy="60" r="45" />
+				<circle class="ou-ring ou-ring-2" cx="60" cy="60" r="35" />
+				<circle class="ou-ring-progress" cx="60" cy="60" r="28" />
+				<g transform="translate(44, 44)">
+					<rect x="2" y="10" width="28" height="14" rx="3" fill="#2563eb"/>
+					<circle cx="8" cy="17" r="1.5" fill="#ffffff"/>
+					<circle cx="14" cy="17" r="1.5" fill="#ffffff"/>
+					<line x1="8" y1="10" x2="5" y2="3" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+					<line x1="24" y1="10" x2="27" y2="3" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+				</g>
+			</svg>
+		</div>
+		<h2 class="ou-reboot-title">路由器正在重启</h2>
+		<p class="ou-reboot-desc">固件已成功刷写，网络服务与系统配置正在自举恢复中，请耐心等待上线...</p>
+
+		<div class="ou-countdown-wrap">
+			<span class="ou-countdown" id="reboot-countdown">120</span>
+			<span class="ou-countdown-unit">秒</span>
+		</div>
+
+		<div class="ou-reboot-status">
+			<span class="ou-ping-dot"></span>
+			<span>正在持续侦测路由器管理网关响应...</span>
+		</div>
+
+		<button id="btn-reload" class="btn ou-btn ou-btn-primary ou-btn-lg" type="button">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+			<span class="btn-label">立即尝试刷新</span>
+		</button>
+	</div>
+</div>
+
+<!-- 通用确认/提示弹窗：手机端底部抽屉，桌面端居中对话框 -->
+<div id="ou-dialog" class="ou-dialog" style="display:none" aria-hidden="true">
+	<div class="ou-dialog-backdrop" data-ou-dialog-dismiss="1"></div>
+	<div class="ou-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="ou-dialog-title" aria-describedby="ou-dialog-body">
+		<div class="ou-dialog-grabber" aria-hidden="true"></div>
+		<div class="ou-dialog-head">
+			<div class="ou-dialog-icon" id="ou-dialog-icon" aria-hidden="true"></div>
+			<div class="ou-dialog-heading">
+				<span class="ou-dialog-eyebrow" id="ou-dialog-eyebrow">确认操作</span>
+				<h3 class="ou-dialog-title" id="ou-dialog-title">请确认</h3>
+			</div>
+			<button type="button" class="ou-dialog-close" id="ou-dialog-close" aria-label="关闭弹窗">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+			</button>
+		</div>
+		<div class="ou-dialog-body" id="ou-dialog-body"></div>
+		<div class="ou-dialog-actions">
+			<button type="button" class="btn ou-btn ou-btn-default" id="ou-dialog-cancel">取消</button>
+			<button type="button" class="btn ou-btn ou-btn-primary" id="ou-dialog-confirm">确定</button>
+		</div>
+	</div>
+</div>
+
+<script>window.__OU_SESSION__ = '{{ ctx.authsession || "" }}';</script>
+<script src="{{ resource }}/online-upgrade/h5000m.js?v=2.6.10-h5000m-r100"></script>
+<script src="{{ resource }}/online-upgrade/app.js?v=2.6.10-h5000m-r100"></script>
+
+{% include('footer') %}

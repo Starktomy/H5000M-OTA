@@ -1,0 +1,7 @@
+H5000M OTA integration
+
+Includes luci-app-online-upgrade by gooyjq / LianXia233.
+Upstream: https://github.com/LianXia233/luci-app-online-upgrade
+Base commit: cc258f958ae8b9224cfd77f1156e82dc0380ccca (2.6.10)
+Original copyright and license notices are preserved in package/luci-app-online-upgrade.
+The H5000M integration adds the unified release catalog and driver/profile-aware configuration retention.

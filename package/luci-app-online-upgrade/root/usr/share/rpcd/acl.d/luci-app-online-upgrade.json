@@ -1,0 +1,72 @@
+{
+  "luci-app-online-upgrade": {
+    "description": "Grant access to LuCI app online-upgrade",
+    "read": {
+      "ubus": {
+        "luci.online-upgrade": [
+          "get_status",
+          "get_log",
+          "list_backups",
+          "get_config",
+          "get_sysinfo",
+          "probe_assets",
+          "list_tasks",
+          "plugin_info",
+          "get_plugin_status",
+          "get_states",
+          "get_device",
+          "get_diagnostics",
+          "probe_repo",
+          "netcheck",
+          "h5000m_catalog",
+          "h5000m_policy"
+        ]
+      },
+      "cgi-io": [
+        "download"
+      ],
+      "file": {
+        "/root/pre-upgrade-backup-*": [
+          "read"
+        ]
+      },
+      "uci": [
+        "online-upgrade"
+      ]
+    },
+    "write": {
+      "ubus": {
+        "luci.online-upgrade": [
+          "check",
+          "start_upgrade",
+          "start_download",
+          "pause_download",
+          "resume_download",
+          "cancel_download",
+          "delete_task",
+          "backup",
+          "restore",
+          "set_config",
+          "delete_backup",
+          "clear_log",
+          "start_plugin_check",
+          "start_plugin_update",
+          "refresh_states",
+          "clear_states_cache",
+          "h5000m_select"
+        ]
+      },
+      "cgi-io": [
+        "upload"
+      ],
+      "file": {
+        "/tmp/restore-upload.tar.gz": [
+          "write"
+        ]
+      },
+      "uci": [
+        "online-upgrade"
+      ]
+    }
+  }
+}

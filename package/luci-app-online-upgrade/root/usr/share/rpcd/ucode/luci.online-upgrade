@@ -1,0 +1,778 @@
+'use strict';
+
+// luci-app-online-upgrade 的 rpcd ucode 后端。
+// 仅作轻量桥接：实际逻辑全部位于 /usr/bin/online-upgrade（Rust 实现）。
+// 实现方式参考 luci.wolultra，并规避了以下 ucode 陷阱：
+//   - 没有 join()，只能用字符串拼接
+//   - 不能引用 `undefined`，只能判空
+//   - 辅助函数必须先定义后使用
+
+import { popen, readfile, writefile, lsdir, stat, unlink } from 'fs';
+import { cursor } from 'uci';
+
+const BIN = '/usr/bin/online-upgrade';
+const STATUS_FILE = '/tmp/online-upgrade-status.json';
+const PLUGIN_STATUS_FILE = '/tmp/online-upgrade-plugin-status.json';
+const LOG_FILE = '/tmp/online-upgrade.log';
+const BACKUP_DIR = '/root';
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+function shellquote(s) {
+	return "'" + replace('' + s, "'", "'\\''") + "'";
+}
+
+// 兼容 POSIX ERE 的“是否含引号或空白”检查：ucode 正则不支持
+// \s（会被当作普通字符 s），因此改用 split 判断。
+function bad_field(s) {
+	if (type(s) != 'string')
+		return true;
+	return length(split(s, "'")) > 1 ||
+	       length(split(s, '"')) > 1 ||
+	       length(split(s, ' ')) > 1 ||
+	       length(split(s, '\t')) > 1 ||
+	       length(split(s, '\n')) > 1 ||
+	       length(split(s, '\r')) > 1;
+}
+
+function run_capture(cmd, args) {
+	let cmdline = cmd;
+	for (let a in (args ?? []))
+		cmdline += ' ' + shellquote(a);
+
+	let out = '';
+	let code = 126;
+	// stderr 重定向到应用日志，保证 stdout 是干净的 JSON，供 parse_json_stdout() 解析
+	let fd = popen(cmdline + ' 2>>/tmp/online-upgrade.log');
+	if (fd) {
+		out = fd.read('all') ?? '';
+		code = fd.close();
+	}
+	return { out: out, code: code };
+}
+
+function run_detached(cmd, args, quiet) {
+	let cmdline = 'setsid ' + cmd;
+	for (let a in (args ?? []))
+		cmdline += ' ' + shellquote(a);
+	// quiet：结构化 JSON 命令只保留 stderr，避免整段 JSON 刷进运行日志；
+	// 非 quiet：stdout/stderr 都进日志（check/upgrade 等人类可读输出）。
+	cmdline += quiet
+		? ' </dev/null >/dev/null 2>>' + LOG_FILE + ' &'
+		: ' </dev/null >>' + LOG_FILE + ' 2>&1 &';
+	system(cmdline);
+}
+
+function parse_json_stdout(text) {
+	// 二进制在 stdout 输出单个 JSON 对象；日志行写入日志文件
+	let trimmed = trim('' + text);
+	if (length(trimmed) == 0)
+		return null;
+	return json(trimmed);
+}
+
+// 小型同步 CLI 命令（pause/resume/cancel/tasks）共用同一套
+// stdout-JSON 约定。它们必须保持同步，界面才能立即展示结果，
+// 而不必猜测后台 detached 进程是否收到了命令。
+function control_call(cmd, extra) {
+	let args = [cmd];
+	for (let a in (extra ?? []))
+		push(args, a);
+	let r = run_capture(BIN, args);
+	let obj = parse_json_stdout(r.out);
+	if (type(obj) == 'object')
+		return obj;
+	return { ok: false, error: trim(r.out) != '' ? trim(r.out) : cmd + ' 执行失败 (code ' + r.code + ')' };
+}
+
+function read_status() {
+	let content = readfile(STATUS_FILE);
+	if (!content)
+		return { stage: 'idle' };
+	let obj = json(content);
+	return type(obj) == 'object' ? obj : { stage: 'idle' };
+}
+
+// 插件自身状态独立存放：固件检查/升级与插件更新可以各自保留进度，
+// 不会互相覆盖对方的状态文件。
+// 只有仍在运行的更新进程才会写入这些状态。
+const PLUGIN_ACTIVE_STATES = ['checking', 'updating', 'downloading', 'verifying', 'installing'];
+
+function plugin_state_is_active(state) {
+	if (type(state) != 'string')
+		return false;
+	for (let s in PLUGIN_ACTIVE_STATES)
+		if (s == state)
+			return true;
+	return false;
+}
+
+// pid 是否仍是本插件的存活进程。
+// /proc/<pid>/comm 由内核维护、长度不超过 15 字节且不含 NUL，最可靠；
+// /proc/<pid>/cmdline 以 NUL 分隔，部分读法会在首个 NUL 处截断，因此
+// 只作兜底（可执行路径总在首段）。两者都要求出现程序名，避免内核
+// pid 复用把无关进程当成“仍在安装”。
+function plugin_pid_alive(pid) {
+	if (pid == null || type(pid) != 'int' || pid <= 0)
+		return false;
+
+	let comm = readfile('/proc/' + pid + '/comm');
+	if (comm != null && type(comm) == 'string' && match(comm, /online-upgrade/) != null)
+		return true;
+
+	let raw = readfile('/proc/' + pid + '/cmdline');
+	if (raw == null || type(raw) != 'string' || length(raw) == 0)
+		return false;
+	return match(raw, /online-upgrade/) != null;
+}
+
+function read_plugin_status() {
+	let content = readfile(PLUGIN_STATUS_FILE);
+	if (!content)
+		return { state: 'idle' };
+	let obj = json(content);
+	if (type(obj) != 'object')
+		return { state: 'idle' };
+
+	// 活跃状态但写入进程已不存在，说明上次更新被中断（设备重启、断电、
+	// apk 阻塞后被 kill、或安装超时中止）。这类残留状态必须收敛成终态，
+	// 否则状态文件会永久停留在「安装中」，界面再也无法发起新的更新。
+	if (plugin_state_is_active(obj.state) && !plugin_pid_alive(obj.pid)) {
+		let fixed = {
+			state: 'failed',
+			pct: obj.pct ?? 0,
+			msg: '上次插件更新已中断',
+			error: '更新进程已退出（可能是设备重启、断电或安装过程被中断），' +
+			       '插件版本未变更。请查看 /tmp/online-upgrade.log 确认原因，' +
+			       '然后重新点击「更新插件」。',
+			ts: obj.ts,
+			pid: obj.pid,
+			interrupted: true
+		};
+		// 尽力回写，避免每次轮询重复判定；写失败不影响本次返回值。
+		writefile(PLUGIN_STATUS_FILE, sprintf('%J', fixed));
+		return fixed;
+	}
+
+	return obj;
+}
+
+function read_log() {
+	let st = stat(LOG_FILE);
+	if (!st || st.size == 0)
+		return { log: '', size: 0 };
+	let content = readfile(LOG_FILE);
+	if (!content)
+		return { log: '', size: 0 };
+	content = '' + content;
+	// 内存上限：读取缓冲区最大 2MB（2 * 1024 * 1024 = 2097152 字节）
+	if (length(content) > 2097152)
+		content = substr(content, length(content) - 2097152);
+	return { log: content, size: length(content) };
+}
+
+function list_backups() {
+	let entries = lsdir(BACKUP_DIR) ?? [];
+	let result = [];
+	for (let name in entries) {
+		if (match('' + name, /^pre-upgrade-backup-.*\.tar\.gz$/) == null)
+			continue;
+		let st = stat(BACKUP_DIR + '/' + name);
+		// 注意：ucode 数组没有 .push() 方法，需使用全局 push()
+		push(result, {
+			name: '' + name,
+			path: BACKUP_DIR + '/' + name,
+			size: st ? st.size : 0,
+			mtime: st ? st.mtime : 0
+		});
+	}
+	// 文件名内含时间戳，故按字典序倒排即为最新在前
+	sort(result, (a, b) => a.name > b.name ? -1 : a.name < b.name ? 1 : 0);
+	return { backups: result };
+}
+
+function sysinfo() {
+	let text = readfile('/etc/openwrt_release') ?? '';
+	// 注意：ucode 的 match() 传入字符串时按字面量匹配而非正则，
+	// 因此这里手动逐行解析。
+	let grab = function(key) {
+		let prefix = key + "='";
+		for (let line in split(text, '\n')) {
+			line = '' + line;
+			if (substr(line, 0, length(prefix)) == prefix)
+				return replace(substr(line, length(prefix)), /'.*$/, '');
+		}
+		return '';
+	};
+	let model = trim('' + (readfile('/tmp/sysinfo/model') ?? ''));
+	let board_name = trim('' + (readfile('/tmp/sysinfo/board_name') ?? ''));
+	return {
+		id: grab('DISTRIB_ID'),
+		release: grab('DISTRIB_RELEASE'),
+		revision: grab('DISTRIB_REVISION'),
+		target: grab('DISTRIB_TARGET'),
+		arch: grab('DISTRIB_ARCH'),
+		model: model != '' ? model : '通用路由器',
+		board_name: board_name
+	};
+}
+
+function valid_pattern(p) {
+	// 固件匹配用的 ERE；以 POSIX 安全的方式拒绝引号与空白
+	return type(p) == 'string' && length(p) > 0 && length(p) < 512 &&
+		!bad_field(p);
+}
+
+// 镜像前缀归一化：后端会把 proxy 直接拼在资产地址前面，若用户填
+// "https://host" 而没有结尾斜杠，拼接结果会变成 "https://hosthttps://..."。
+// 返回 '' 表示直连、成功时返回归一化后的前缀、非法时返回 null。
+// ucode 正则限制：不支持非捕获分组、不支持 \s、不支持区间量词。
+function normalize_proxy(u) {
+	if (type(u) != 'string' || length(u) >= 512)
+		return null;
+	let s = replace(trim('' + u), /\/+$/, '');
+	if (length(s) == 0)
+		return '';
+	let has_path = match(s, /^https?:\/\/[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.:~%\/-]*$/) != null;
+	let host_only = match(s, /^https?:\/\/[A-Za-z0-9_.:-]+$/) != null;
+	if (!has_path && !host_only)
+		return null;
+	return s + '/';
+}
+
+// 快速失败：权威互斥由 Rust 二进制里的锁文件负责，但它以 detached 方式运行，
+// 第二次点击若只交给后端就会先返回 ok，然后静默什么都不做。
+// 返回正在执行任务的 pid 字符串，空闲或锁文件陈旧时返回 ''。
+// 锁文件内容是 "<pid> <mode> <timestamp>" 三个字段，因此只能取首个字段比对整行
+// （曾经用 /^[0-9]+$/ 匹配整行，永远匹配失败，导致这个快速失败形同虚设）。
+function busy_pid() {
+	let content = readfile('/tmp/online-upgrade.lock');
+	if (!content)
+		return '';
+	let head = match(trim('' + content), /^[0-9]+/);
+	if (head == null)
+		return '';
+	let pid = head[0];
+	let alive = readfile('/proc/' + pid + '/cmdline');
+	if (alive == null || type(alive) != 'string')
+		return ''; // 崩溃残留的锁文件，后端会自行回收
+	return pid;
+}
+
+const methods = {
+	check: {
+		call: function() {
+			let pid = busy_pid();
+			if (length(pid) > 0)
+				return { ok: false, error: '已有任务正在执行(pid ' + pid + ')，请等待完成后再试' };
+			// 「检查更新」同时刷新四套远程状态：先强制刷新 Actions/Releases/
+			// Artifacts/Compat/Network，再执行固件检测，使「远程状态与统一诊断」
+			// 与本次检测同源同刻，而不是各自沿用旧缓存。
+			// 用 ; 而不是 &&：状态刷新失败不得阻断固件检测。
+			run_detached('/bin/sh', ['-c',
+				BIN + ' refresh --force >/dev/null 2>&1; ' + BIN + ' check']);
+			return { ok: true };
+		}
+	},
+
+	h5000m_catalog: {
+		call: function() { return control_call('h5000m-catalog'); }
+	},
+
+	h5000m_policy: {
+		call: function() { return control_call('h5000m-policy'); }
+	},
+
+	h5000m_select: {
+		args: { id: '', keep: false },
+		call: function(request) {
+			let id = request.args?.id;
+			if (type(id) != 'string' || length(id) == 0 || length(id) > 256 || bad_field(id))
+				return { ok: false, error: '版本 ID 无效' };
+			let pid = busy_pid();
+			if (length(pid) > 0)
+				return { ok: false, error: '已有任务正在执行，请等待完成后选择版本' };
+			let args = [id];
+			if (request.args?.keep === true)
+				push(args, '--keep-config');
+			return control_call('h5000m-select', args);
+		}
+	},
+
+	start_upgrade: {
+		// rpcd 依据该值的*类型*推导 blobmsg 策略，而不是依据
+		// 类型名字符串：写成 'boolean' 会落到 BLOBMSG_TYPE_STRING，
+		// 导致传入 JSON true/false 时被 UBUS_STATUS_INVALID_ARGUMENT 拒绝。
+		// 写成字面量 false 才能得到 BLOBMSG_TYPE_INT8（即 BLOBMSG_TYPE_BOOL）。
+		args: { force: false },
+		call: function(request) {
+			let pid = busy_pid();
+			if (length(pid) > 0)
+				return { ok: false, error: '已有升级任务正在执行(pid ' + pid + ')，请等待完成后再试' };
+			let force = request.args?.force === true;
+			let args = force ? ['upgrade', '--force'] : ['upgrade'];
+			run_detached(BIN, args);
+			return { ok: true, force: force };
+		}
+	},
+
+	start_download: {
+		// 试运行下载：检查 + 分段传输 + 哈希校验，
+		// 不会写入闪存；与 check/upgrade 一样以 detached 方式运行。
+		call: function() {
+			let pid = busy_pid();
+			if (length(pid) > 0)
+				return { ok: false, error: '已有任务正在执行(pid ' + pid + ')，请先暂停或取消' };
+			run_detached(BIN, ['download']);
+			return { ok: true };
+		}
+	},
+
+	pause_download: {
+		call: function() { return control_call('pause'); }
+	},
+
+	resume_download: {
+		call: function() { return control_call('resume'); }
+	},
+
+	cancel_download: {
+		call: function() { return control_call('cancel'); }
+	},
+
+	list_tasks: {
+		call: function() { return control_call('tasks'); }
+	},
+
+	delete_task: {
+		args: { id: '', force: false },
+		call: function(request) {
+			let id = request.args?.id;
+			// ucode 正则不支持有界量词 {m,n}，因此单独限制
+			// 长度。
+			if (type(id) != 'string' || length(id) > 64 || length(id) == 0 ||
+			    match(id, /^[0-9a-z-]+$/) == null)
+				return { ok: false, error: '任务 ID 不合法' };
+			let extra = [id];
+			if (request.args?.force === true)
+				push(extra, '--force');
+			return control_call('task-delete', extra);
+		}
+	},
+
+	get_status: {
+		call: function() {
+			return read_status();
+		}
+	},
+
+	get_log: {
+		call: function() {
+			return read_log();
+		}
+	},
+
+	clear_log: {
+		call: function() {
+			run_capture(BIN, ['clear-log']);
+			unlink(LOG_FILE);
+			return { ok: true };
+		}
+	},
+
+	backup: {
+		call: function() {
+			let r = run_capture(BIN, ['backup']);
+			let obj = parse_json_stdout(r.out);
+			if (type(obj) == 'object')
+				return obj;
+			return { ok: false, error: trim(r.out) != '' ? trim(r.out) : '备份命令执行失败 (code ' + r.code + ')' };
+		}
+	},
+
+	list_backups: {
+		call: function() {
+			return list_backups();
+		}
+	},
+
+	restore: {
+		args: { path: 'string' },
+		call: function(request) {
+			let path = request.args?.path;
+			if (type(path) != 'string' ||
+			    (substr(path, 0, length(BACKUP_DIR) + 1) != BACKUP_DIR + '/' &&
+			     substr(path, 0, 5) != '/tmp/'))
+				return { ok: false, error: '不允许的路径' };
+			let r = run_capture(BIN, ['restore', path]);
+			let obj = parse_json_stdout(r.out);
+			if (type(obj) == 'object')
+				return obj;
+			return { ok: false, error: trim(r.out) != '' ? trim(r.out) : '恢复命令执行失败 (code ' + r.code + ')' };
+		}
+	},
+
+	probe_assets: {
+		// 列出任意仓库最新 Release 的资产，供 Web 界面
+		// “获取固件列表”功能使用；repo/tag 由参数传入
+		args: { repo: '', tag: '' },
+		call: function(request) {
+			let repo = request.args?.repo;
+			let tag = request.args?.tag;
+			if (type(repo) != 'string' || match(repo, REPO_RE) == null)
+				return { ok: false, error: '仓库格式不正确(应为 owner/repo)' };
+			if (type(tag) != 'string' || length(tag) == 0)
+				tag = 'latest';
+			if (length(tag) > 160 || bad_field(tag))
+				return { ok: false, error: '标签格式不正确' };
+			let r = run_capture(BIN, ['probe', '--repo', repo, '--tag', tag]);
+			let obj = parse_json_stdout(r.out);
+			if (type(obj) == 'object')
+				return obj;
+			return { ok: false, error: trim(r.out) != '' ? trim(r.out) : '探测失败 (code ' + r.code + ')' };
+		}
+	},
+
+	delete_backup: {
+		args: { path: '' },
+		call: function(request) {
+			let path = request.args?.path;
+			// 删除范围刻意收窄：仅允许本应用在 /root/ 下生成的备份文件
+			if (type(path) != 'string' ||
+			    match(path, /^\/root\/pre-upgrade-backup-[0-9]{8}-[0-9]{6}\.tar\.gz$/) == null)
+				return { ok: false, error: '不允许删除该路径' };
+			if (!unlink(path))
+				return { ok: false, error: '删除失败(文件不存在或无权限)' };
+			return { ok: true };
+		}
+	},
+
+	get_sysinfo: {
+		call: function() {
+			return sysinfo();
+		}
+	},
+
+	// ---- 插件自身版本与更新 ------------------------------------------------
+	plugin_info: {
+		call: function() {
+			return control_call('plugin-info');
+		}
+	},
+
+	start_plugin_check: {
+		call: function() { return { ok: false, error: 'OTA 组件随固件更新' }; }
+	},
+
+	start_plugin_update: {
+		call: function() { return { ok: false, error: 'OTA 组件随固件更新' }; }
+	},
+
+	get_plugin_status: {
+		call: function() {
+			return read_plugin_status();
+		}
+	},
+
+	get_config: {
+		call: function() {
+			let ctx = cursor();
+			let settings = ctx.get_all('online-upgrade', 'settings');
+			return { settings: type(settings) == 'object' ? settings : {} };
+		}
+	},
+
+	set_config: {
+		// 类型提示必须写成字面量默认值，不能写类型名字符串或
+		// { type: '...' } 这类声明：0 → int32，'' → string，{} → table。
+		// 请求中未出现的参数会保持缺省，因此这里每个键都是可选的。
+		args: {
+			repo: '',
+			tag: '',
+			pattern: '',
+			proxy: '',
+			github_token: '',
+			keep_config: '',
+			dl_workers: 0,
+			dl_chunk_mb: 0,
+			dl_stall_sec: 0,
+			dl_retries: 0,
+			min_size_mb: 0,
+			dl_min_speed_kb: 0,
+			dl_slow_window_sec: 0,
+			dl_slow_grace_sec: 0,
+			expected_sha256: '',
+			// v2.6 新增：全部可选，未出现时保持原值，不覆盖历史配置
+			repo_url: '',
+			build_branch: '',
+			workflow_filter: '',
+			api_via_proxy: '',
+			api_timeout: 0,
+			ttl_actions: 0,
+			ttl_releases: 0,
+			ttl_artifacts: 0,
+			ttl_compat: 0,
+			ttl_network: 0
+		},
+		call: function(request) {
+			let a = request.args ?? {};
+			if (length(busy_pid()) > 0)
+				return { ok: false, error: '已有任务正在执行，请等待完成再修改设置' };
+			let ctx = cursor();
+			// 目标只能通过目录选择器变更；下载调优不能覆盖目标和校验值。
+			for (let opt in [['repo', 'repo'], ['tag', 'tag'], ['pattern', 'firmware_pattern'],
+			                 ['repo_url', 'repo_url'], ['expected_sha256', 'expected_sha256']]) {
+				if (type(a[opt[0]]) == 'string' && a[opt[0]] != (ctx.get('online-upgrade', 'settings', opt[1]) ?? ''))
+					return { ok: false, error: '请使用上方 H5000M 目录选择固件版本' };
+			}
+			if (a.keep_config == '1') {
+				let policy = control_call('h5000m-policy');
+				if (policy.can_keep !== true)
+					a.keep_config = '0';
+			}
+			let touched = 0;
+
+			// 固件最小体积下限（MB）；0 表示不设下限
+			if (type(a.min_size_mb) == 'int') {
+				let v = a.min_size_mb;
+				if (v < 0 || v > 512)
+					return { ok: false, error: 'min_size_mb 超出范围 (0-512)' };
+				ctx.set('online-upgrade', 'settings', 'min_size_mb', '' + v);
+				touched++;
+			}
+
+			// 下载器高级参数：传 0 表示恢复默认值
+			let int_opts = [
+				['dl_workers', 1, 16, 6],
+				['dl_chunk_mb', 1, 32, 4],
+				['dl_stall_sec', 5, 600, 30],
+				['dl_retries', 1, 10, 3]
+			];
+			for (let idx, opt in int_opts) {
+				let key = opt[0], lo = opt[1], hi = opt[2], def = opt[3];
+				if (type(a[key]) == 'int') {
+					let v = a[key];
+					if (v == 0)
+						v = def;
+					if (v < lo || v > hi)
+						return { ok: false, error: key + ' 超出范围 (' + lo + '-' + hi + ')' };
+					ctx.set('online-upgrade', 'settings', key, '' + v);
+					touched++;
+				}
+			}
+
+			// 慢速保护参数。与 int_opts 不同，这里的 0 有实际含义
+			// （dl_min_speed_kb=0 表示关闭保护，grace=0 合法），
+			// 因此绝不能把 0 解释为“恢复默认值”。
+			let guard_opts = [
+				['dl_min_speed_kb', 0, 10240],
+				['dl_slow_window_sec', 3, 300],
+				['dl_slow_grace_sec', 0, 300]
+			];
+			for (let idx, opt in guard_opts) {
+				let key = opt[0], lo = opt[1], hi = opt[2];
+				if (type(a[key]) == 'int') {
+					let v = a[key];
+					if (v < lo || v > hi)
+						return { ok: false, error: key + ' 超出范围 (' + lo + '-' + hi + ')' };
+					ctx.set('online-upgrade', 'settings', key, '' + v);
+					touched++;
+				}
+			}
+
+			if (type(a.repo) == 'string' && length(a.repo) > 0) {
+				if (match(a.repo, REPO_RE) == null)
+					return { ok: false, error: '仓库格式不正确(应为 owner/repo)' };
+				ctx.set('online-upgrade', 'settings', 'repo', a.repo);
+				touched++;
+			}
+			if (type(a.tag) == 'string' && length(a.tag) > 0) {
+				// 允许 `latest@<正则>`（含中文标签名）；禁止引号与空白
+				if (length(a.tag) > 160 || bad_field(a.tag))
+					return { ok: false, error: '标签格式不正确(不能含引号或空白)' };
+				ctx.set('online-upgrade', 'settings', 'tag', a.tag);
+				touched++;
+			}
+			// 空字符串表示显式清空匹配规则（此时后端只接受结构化比对判定为
+			// 兼容的资产，不再按正则选取）
+			if (type(a.pattern) == 'string') {
+				if (length(a.pattern) > 0 && !valid_pattern(a.pattern))
+					return { ok: false, error: '固件匹配模式不合法' };
+				ctx.set('online-upgrade', 'settings', 'firmware_pattern', a.pattern);
+				touched++;
+			}
+			if (type(a.proxy) == 'string') {
+				let p = normalize_proxy(a.proxy);
+				if (p == null)
+					return { ok: false, error: '代理地址不合法(需 http(s)://主机[:端口][/路径])' };
+				ctx.set('online-upgrade', 'settings', 'proxy', p);
+				touched++;
+			}
+			if (type(a.keep_config) == 'string' && length(a.keep_config) > 0) {
+				if (a.keep_config != '0' && a.keep_config != '1')
+					return { ok: false, error: '保留配置取值不合法' };
+				ctx.set('online-upgrade', 'settings', 'keep_config', a.keep_config);
+				touched++;
+			}
+			if (type(a.github_token) == 'string') {
+				if (length(a.github_token) > 256)
+					return { ok: false, error: 'token 过长' };
+				ctx.set('online-upgrade', 'settings', 'github_token', a.github_token);
+				touched++;
+			}
+			if (type(a.expected_sha256) == 'string') {
+				let h = trim(a.expected_sha256);
+				if (length(h) > 0 && match(h, /^[0-9a-fA-F]{64}$/) == null)
+					return { ok: false, error: 'SHA256 哈希格式不正确 (应为 64 位十六进制字符或留空)' };
+				ctx.set('online-upgrade', 'settings', 'expected_sha256', lc(h));
+				touched++;
+			}
+
+			// ---- v2.6 新增配置：通用仓库 / 分支 / Workflow / 缓存 TTL ----
+			// 字符串类：禁止引号与空白，长度受限；空串表示清空该可选值。
+			let str_opts = [
+				['repo_url', 512], ['build_branch', 128], ['workflow_filter', 256]
+			];
+			for (let idx, opt in str_opts) {
+				let key = opt[0], lim = opt[1];
+				if (type(a[key]) == 'string') {
+					let v = trim(a[key]);
+					if (length(v) > lim || (length(v) > 0 && bad_field(v)))
+						return { ok: false, error: key + ' 不合法(过长或含引号/空白)' };
+					ctx.set('online-upgrade', 'settings', key, v);
+					touched++;
+				}
+			}
+			if (type(a.api_via_proxy) == 'string') {
+				let v = trim(a.api_via_proxy);
+				if (v != '' && v != '0' && v != '1')
+					return { ok: false, error: 'api_via_proxy 只能为 0 或 1' };
+				ctx.set('online-upgrade', 'settings', 'api_via_proxy', v);
+				touched++;
+			}
+			// 整数类：0 表示恢复默认（删除该键，让后端使用内置 TTL）
+			let int_opts2 = [
+				['api_timeout', 5, 120],
+				['ttl_actions', 15, 86400], ['ttl_releases', 15, 86400],
+				['ttl_artifacts', 15, 86400], ['ttl_compat', 15, 86400],
+				['ttl_network', 15, 86400]
+			];
+			for (let idx, opt in int_opts2) {
+				let key = opt[0], lo = opt[1], hi = opt[2];
+				if (type(a[key]) == 'int') {
+					let v = a[key];
+					if (v == 0) {
+						// 置空即恢复内置默认：后端 ttl_from_uci 解析失败会回落默认值，
+						// 不依赖各版本 ucode cursor 是否提供 delete()。
+						ctx.set('online-upgrade', 'settings', key, '');
+						touched++;
+						continue;
+					}
+					if (v < lo || v > hi)
+						return { ok: false, error: key + ' 超出范围 (' + lo + '-' + hi + ')' };
+					ctx.set('online-upgrade', 'settings', key, '' + v);
+					touched++;
+				}
+			}
+
+			if (touched == 0)
+				return { ok: false, error: '没有可保存的配置' };
+			ctx.commit('online-upgrade');
+			return { ok: true };
+		}
+	},
+
+	// ---- 四套独立状态模型 / 统一诊断层（v2.6 新增） ----------------------
+	// 契约：
+	// - 全部只读方法只读取 /tmp 下的独立缓存文件，不发起 GitHub 请求，
+	//   因此页面轮询不会消耗匿名 API 额度。
+	// - 失败统一返回 { ok:false, error, error_code }；绝不把 Token 放进返回值。
+	// - refresh_states 走 detached，但只写独立缓存文件，不占用全局操作锁。
+	// - 所有旧方法的参数、返回字段、类型一字未改。
+
+	// 只读聚合：设备信息 + 四套模型 + 网络 + 诊断结果
+	get_states: {
+		call: function() {
+			return control_call('states');
+		}
+	},
+
+	// 只读：仅设备标准化信息
+	get_device: {
+		call: function() {
+			return control_call('device');
+		}
+	},
+
+	// 只读：仅诊断结果（轻量，供手机端 / 状态条单独刷新）
+	get_diagnostics: {
+		call: function() {
+			let obj = control_call('states');
+			if (type(obj) == 'object' && obj.ok == true)
+				return { ok: true, diagnostics: obj.diagnostics, generated_at: obj.generated_at };
+			return obj;
+		}
+	},
+
+	// 触发刷新：model 为空=全部；可选 actions/releases/artifacts/compat/network
+	refresh_states: {
+		args: { model: '', force: false },
+		call: function(request) {
+			let model = request.args?.model ?? '';
+			if (type(model) != 'string' || length(model) > 32)
+				return { ok: false, error: '刷新目标不合法' };
+			if (length(model) > 0) {
+				let allowed = ['all', 'actions', 'releases', 'artifacts', 'compat', 'network'];
+				let valid = false;
+				for (let m in allowed)
+					if (m == model)
+						valid = true;
+				if (!valid)
+					return { ok: false, error: '刷新目标不合法' };
+			}
+			let args = ['refresh'];
+			if (length(model) > 0) {
+				push(args, '--only');
+				push(args, model);
+			}
+			if (request.args?.force === true)
+				push(args, '--force');
+			// refresh 的 stdout 是完整 states JSON，只保留 stderr 进日志
+			run_detached(BIN, args, true);
+			return { ok: true, model: model, force: request.args?.force === true };
+		}
+	},
+
+	// 仓库自动发现：校验地址 + 读取默认分支 + 列出全部公开 Workflow
+	probe_repo: {
+		args: { repo: '' },
+		call: function(request) {
+			let repo = request.args?.repo ?? '';
+			if (type(repo) != 'string' || length(repo) == 0 || length(repo) > 512 || bad_field(repo))
+				return { ok: false, error: '仓库地址不合法(应为 owner/repo 或完整 GitHub URL)' };
+			let obj = control_call('probe-repo', [repo]);
+			if (type(obj) == 'object' && obj.ok == false && !obj.error_code)
+				obj.error_code = 'probe_failed';
+			return obj;
+		}
+	},
+
+	// 网络连通性独立探测（真实 HTTP 请求，非 Ping）
+	netcheck: {
+		args: { force: false },
+		call: function(request) {
+			let extra = [];
+			if (request.args?.force === true)
+				push(extra, '--force');
+			return control_call('netcheck', extra);
+		}
+	},
+
+	// 清空四套模型与网络缓存（不动 status.json / 任务历史 / 固件文件）
+	clear_states_cache: {
+		call: function() {
+			return control_call('clear-cache');
+		}
+	}
+};
+
+return { 'luci.online-upgrade': methods };

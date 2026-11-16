@@ -1,0 +1,42 @@
+name: Promote Stable Firmware
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: '已完成实机验证的构建所在仓库'
+        type: choice
+        required: true
+        options:
+          - Starktomy/OpenWRT-CI-H5000M
+          - Starktomy/CloseWRT-CI-H5000M
+      source_tag:
+        description: '完整构建标签（H5000M-方案-源码-构建时间）'
+        type: string
+        required: true
+      notes:
+        description: '实机验证结果与稳定版说明'
+        type: string
+        required: true
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: ota-stable-promotion
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and copy firmware into a permanent OTA Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: python3 scripts/promote.py --source-repo "$SOURCE_REPO" --source-tag "$SOURCE_TAG" --notes "$RELEASE_NOTES"
+  catalog:
+    needs: promote
+    uses: ./.github/workflows/Catalog.yml

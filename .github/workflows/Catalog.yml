@@ -1,0 +1,54 @@
+name: Sync OTA Catalog
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: '17,47 * * * *'
+  push:
+    branches: [main]
+    paths: [scripts/**, web/**, catalog.json, .github/workflows/Catalog.yml]
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: ota-catalog
+  cancel-in-progress: false
+jobs:
+  catalog:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Generate and validate firmware catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m unittest discover -s tests -p 'test_catalog.py' -v
+          python3 scripts/catalog.py
+      - name: Commit catalog changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add catalog.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: refresh H5000M firmware catalog"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+      - name: Prepare download page
+        run: |
+          mkdir -p site
+          cp web/* catalog.json site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: Deploy Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}

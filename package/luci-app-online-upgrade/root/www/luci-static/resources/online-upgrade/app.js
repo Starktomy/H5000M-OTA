@@ -1,0 +1,2721 @@
+/* luci-app-online-upgrade v2 —— 原生 JS 前端（不依赖 LuCI 框架）。
+ * RPC：通过 uhttpd-mod-ubus 以 JSON-RPC 调用 luci.online-upgrade 对象。
+ * 会话令牌：使用 LuCI 管理会话 Cookie（调度器会话本身就是一个
+ * ubus 会话），并以服务端注入的全局变量作为兜底。 */
+(function () {
+	'use strict';
+
+	/* ---------------- 会话 ---------------- */
+
+	function readCookie(name) {
+		var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+		return m ? decodeURIComponent(m[1]) : '';
+	}
+
+	function luciSession() {
+		try { return (window.L && window.L.env && window.L.env.sessionid) || ''; }
+		catch (e) { return ''; }
+	}
+
+	var SID = window.__OU_SESSION__ || luciSession() ||
+		readCookie('sysauth_https') || readCookie('sysauth_http') || readCookie('sysauth') || '';
+
+	/* ---------------- ubus JSON-RPC 调用 ---------------- */
+
+	var rpcId = 0;
+
+	function ubus(method, params) {
+		return fetch('/ubus/', {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				jsonrpc: '2.0', method: 'call',
+				params: [SID, 'luci.online-upgrade', method, params || {}],
+				id: ++rpcId
+			})
+		}).then(function (r) {
+			if (r.status === 403 || r.status === 401)
+				throw new Error('会话已过期,请刷新页面重新登录 LuCI');
+			return r.json();
+		}).then(function (res) {
+			if (res.error) {
+				if (res.error.code === -32002)
+					throw new Error('权限不足（Access denied）：插件可能刚升级但 rpcd 未重载。'
+						+ '请重新登录 LuCI 后刷新页面；若仍失败，在设备上执行 '
+						+ '/etc/init.d/rpcd restart，并确认已安装最新版本插件。');
+				throw new Error('RPC error ' + res.error.code
+					+ (res.error.message ? '：' + res.error.message : ''));
+			}
+			var result = res.result;
+			if (!Array.isArray(result)) throw new Error('invalid rpc reply');
+			if (result[0] !== 0) throw new Error('ubus error ' + result[0] + (SID ? '' : '(未获取到会话)'));
+			return result[1];
+		});
+	}
+
+	/* ---------------- 工具函数 ---------------- */
+
+	function $(id) { return document.getElementById(id); }
+
+	function esc(s) {
+		return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+		});
+	}
+
+	function fmtSize(n) {
+		n = Number(n) || 0;
+		if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+		if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+		if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+		return n + ' B';
+	}
+
+	function fmtTime(ts) {
+		ts = Number(ts) || 0;
+		if (!ts) return '—';
+		var d = new Date(ts * 1000);
+		function p(x) { return (x < 10 ? '0' : '') + x; }
+		return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+			' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+	}
+
+	function hint(id, text, cls) {
+		var el = $(id);
+		if (!el) return;
+		el.textContent = text || '';
+		el.className = 'ou-hint hint' + (cls ? ' ' + cls : '');
+	}
+
+	function setText(id, text) {
+		var el = $(id);
+		if (el) el.textContent = text;
+	}
+
+	var pollTimer = null;
+
+	function stopPoll() {
+		if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+	}
+
+	function setBusy(btnId, busy, label) {
+		var b = $(btnId);
+		if (!b) return;
+		b.disabled = !!busy;
+		if (label !== undefined) {
+			var txt = b.querySelector('.btn-label') || b.querySelector('span');
+			if (txt) txt.textContent = label;
+			else b.textContent = label;
+		}
+	}
+
+	/* ---------------- 通用弹窗 ---------------- */
+
+	var dialogResolve = null;
+	var dialogPrevFocus = null;
+	var dialogOnClose = null;
+	var OU_DIALOG_ICONS = {
+		primary: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11 12 14 17 9"/></svg>',
+		danger: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+		warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+		success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'
+	};
+
+	function ouDialog(opts) {
+		opts = opts || {};
+		return new Promise(function (resolve) {
+			var root = $('ou-dialog');
+			if (!root) {
+				// 极端降级：模板缺失时仍然保证操作可继续。
+				resolve(window.confirm(opts.message || ''));
+				return;
+			}
+			if (dialogResolve) {
+				var previous = dialogResolve;
+				dialogResolve = null;
+				if (dialogOnClose) {
+					try { dialogOnClose(); } catch (e) { /* ignore */ }
+				}
+				previous(false);
+			}
+			dialogResolve = resolve;
+			dialogOnClose = opts.onClose || null;
+			dialogPrevFocus = document.activeElement;
+			var tone = opts.tone || 'primary';
+			if (!OU_DIALOG_ICONS[tone]) tone = 'primary';
+			var alertOnly = !!opts.alertOnly;
+
+			root.className = 'ou-dialog tone-' + tone + (opts.wide ? ' is-wide' : '');
+			root.style.display = 'flex';
+			root.setAttribute('aria-hidden', 'false');
+			setText('ou-dialog-title', opts.title || '请确认');
+			setText('ou-dialog-eyebrow', opts.eyebrow || (alertOnly ? '提示' : '确认操作'));
+			$('ou-dialog-icon').innerHTML = OU_DIALOG_ICONS[tone];
+
+			var body = $('ou-dialog-body');
+			var html = opts.html ? opts.html :
+				('<p class="ou-dialog-message">' + esc(opts.message || '') + '</p>');
+			if (!opts.html && opts.detail) {
+				html += '<div class="ou-dialog-detail">' + esc(opts.detail) + '</div>';
+			}
+			body.innerHTML = html;
+			body.scrollTop = 0;
+
+			var cancel = $('ou-dialog-cancel');
+			var confirm = $('ou-dialog-confirm');
+			cancel.classList.toggle('is-hidden', alertOnly);
+			cancel.textContent = opts.cancelText || '取消';
+			confirm.textContent = opts.confirmText || (alertOnly ? '知道了' : '确定');
+			confirm.className = 'btn ou-btn ' + (tone === 'danger' ? 'ou-btn-danger' :
+				tone === 'warning' ? 'ou-btn-warning' : 'ou-btn-primary');
+
+			document.body.classList.add('ou-modal-open');
+			// 先强制提交初始 transform，再同步添加 is-open；
+			// 不依赖 requestAnimationFrame（部分 WebView/无头环境不会触发）。
+			void root.offsetWidth;
+			root.classList.add('is-open');
+			setTimeout(function () {
+				if (!dialogResolve) return;
+				(alertOnly ? confirm : cancel).focus();
+			}, 60);
+		});
+	}
+
+	function finishDialog(ok) {
+		var root = $('ou-dialog');
+		var resolve = dialogResolve;
+		if (!root || !resolve) return;
+		dialogResolve = null;
+		var onClose = dialogOnClose;
+		dialogOnClose = null;
+		root.classList.remove('is-open');
+		root.setAttribute('aria-hidden', 'true');
+		document.body.classList.remove('ou-modal-open');
+		if (dialogPrevFocus && dialogPrevFocus.focus) {
+			try { dialogPrevFocus.focus(); } catch (e) { /* ignore */ }
+		}
+		dialogPrevFocus = null;
+		setTimeout(function () {
+			if (!dialogResolve) root.style.display = 'none';
+		}, 240);
+		resolve(ok === true);
+		if (onClose) {
+			try { onClose(); } catch (e) { /* ignore */ }
+		}
+	}
+
+	function ouConfirm(opts) { return ouDialog(opts); }
+
+	function ouAlert(opts) {
+		opts = opts || {};
+		var copy = {};
+		for (var k in opts) {
+			if (Object.prototype.hasOwnProperty.call(opts, k)) copy[k] = opts[k];
+		}
+		copy.alertOnly = true;
+		return ouDialog(copy);
+	}
+
+	function bindDialog() {
+		var root = $('ou-dialog');
+		if (!root) return;
+		$('ou-dialog-cancel').addEventListener('click', function () { finishDialog(false); });
+		$('ou-dialog-confirm').addEventListener('click', function () { finishDialog(true); });
+		$('ou-dialog-close').addEventListener('click', function () { finishDialog(false); });
+		var backdrop = root.querySelector('[data-ou-dialog-dismiss]');
+		if (backdrop) backdrop.addEventListener('click', function () { finishDialog(false); });
+		document.addEventListener('keydown', function (e) {
+			if (!dialogResolve) return;
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				finishDialog(false);
+				return;
+			}
+			if (e.key !== 'Tab') return;
+			var buttons = root.querySelectorAll('.ou-dialog-panel button:not([disabled])');
+			var visible = [];
+			for (var i = 0; i < buttons.length; i++) {
+				if (buttons[i].offsetParent !== null) visible.push(buttons[i]);
+			}
+			if (!visible.length) return;
+			var first = visible[0];
+			var last = visible[visible.length - 1];
+			if (e.shiftKey && document.activeElement === first) {
+				e.preventDefault();
+				last.focus();
+			} else if (!e.shiftKey && document.activeElement === last) {
+				e.preventDefault();
+				first.focus();
+			}
+		});
+	}
+
+	/* ---------------- detached 运行状态的新旧判定 ---------------- */
+
+	// rpcd 以 detached 方式启动 check/upgrade，点击后第一次轮询读到的往往还是
+	// 上一次运行留下的终态（failed / check_done）。用「写入者 pid」判断新旧：
+	// 新进程必然会写入不同的 pid，而浏览器与路由器的时钟可能不一致，不能用
+	// 客户端时间戳比较。pid 缺失（旧版本写入的状态文件）时退化为时间戳比较。
+	var pollBaseline = { pid: null, ts: 0 };
+	var pollFilter = false;
+
+	function snapshotStatus() {
+		return ubus('get_status').then(function (st) {
+			pollBaseline = {
+				pid: (st && st.pid != null) ? st.pid : null,
+				ts: Number((st && st.ts) || 0)
+			};
+		}).catch(function () {
+			pollBaseline = { pid: null, ts: 0 };
+		});
+	}
+
+	function isFreshRun(st) {
+		if (!st) return false;
+		if (st.pid != null && pollBaseline.pid != null)
+			return st.pid !== pollBaseline.pid;
+		return Number(st.ts || 0) > pollBaseline.ts;
+	}
+
+	/* ---------------- 状态卡片 ---------------- */
+
+	var lastCheck = null;
+
+	// 判定矩阵的每一档都给出用户可读文案，界面上既能看出命中哪条规则，
+	// 也能看出是哪一步没通过（机型未匹配 / 架构未声明 / 架构冲突）。
+	var ARCH_CHECK_TEXT = {
+		ok: '架构一致',
+		conflict: '架构冲突',
+		undeclared: '资产未声明架构',
+		unknown: '本机架构未知'
+	};
+	var MODEL_CHECK_TEXT = {
+		exact: '机型匹配',
+		partial: '机型部分匹配',
+		rule: '命中配置规则',
+		unmatched: '未匹配机型'
+	};
+	var RELATION_TEXT = {
+		newer: '目标版本更高',
+		same: '同版本',
+		older: '目标版本更低',
+		unknown: '版本无法比较'
+	};
+	// 版本判定的三种状态：可信可判定 / 弱依据可疑 / 确实无法比较。
+	// 无法比较不等于阻断，只是把依据说清楚后按「升级到该发布版本」处理。
+	var STATE_TEXT = {
+		decidable: '版本可判定',
+		suspect: '判定依据较弱',
+		incomparable: '版本无法比较'
+	};
+	var STATE_DESC = {
+		decidable: '本地与目标都取到了可信版本号，可直接比较版本方向',
+		suspect: '本地版本来自构建时间、修订号或包版本等弱依据，方向仅供参考',
+		incomparable: '取不到可比较的本地版本号，按「将升级到该发布版本」处理；机型、架构与哈希校验仍然生效'
+	};
+	var CONFIDENCE_TEXT = {
+		strong: '可信',
+		weak: '弱',
+		none: '无'
+	};
+	var HASH_SOURCE_TEXT = {
+		expected_sha256: '配置中的自定义校验值',
+		release_asset: 'Release 校验清单',
+		release_body: 'Release 说明正文',
+		none: '未提供校验依据'
+	};
+
+	function compatLevel(ci) {
+		if (!ci) return 'compatible';
+		return ci.level || (ci.can_upgrade ? 'compatible' : 'incompatible');
+	}
+
+	// 同版本不构成「有更新」：既不能出现「有新版本」引导，也不能把普通升级摆成主操作，
+	// 只保留显式点击的重装 / 切换版本（同版本重装）。
+	var FORCE_LABEL_SAME = '同版本重装';
+
+	function sameVersionChecked() {
+		return !!(lastCheck && lastCheck.version && lastCheck.version.relation === 'same');
+	}
+
+	function forceLabel() {
+		return sameVersionChecked() ? FORCE_LABEL_SAME : '重装 / 切换版本';
+	}
+
+	// .ou-container .ou-btn 带 display:inline-flex !important，inline 的 display:none 会被压过，
+	// 所以按钮显隐统一走 is-hidden 类，同版本时才能真正把「立即升级」收起来。
+	function showBtn(id, on) {
+		var el = $(id);
+		if (!el) return;
+		if (on) el.classList.remove('is-hidden');
+		else el.classList.add('is-hidden');
+		el.style.display = on ? '' : 'none';
+	}
+
+	function tagChip(text, cls, title) {
+		return '<span class="ou-tag-chip' + (cls ? ' ' + cls : '') + '"' +
+			(title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>';
+	}
+
+	function factRow(label, valueHtml, opts) {
+		opts = opts || {};
+		return '<div class="ou-fact' + (opts.wide ? ' ou-fact-wide' : '') + '">' +
+			'<span class="ou-fact-label">' + esc(label) + '</span>' +
+			'<span class="ou-fact-value' + (opts.mono ? ' ou-mono' : '') + '">' + valueHtml + '</span>' +
+			'</div>';
+	}
+
+	function setEvidenceState(text, cls) {
+		var el = $('evidence-state');
+		if (!el) return;
+		el.className = 'ou-evidence-state' + (cls ? ' ' + cls : '');
+		el.textContent = text;
+	}
+
+	function setEvidenceExpanded(open) {
+		var panel = $('check-evidence');
+		var btn = $('evidence-toggle');
+		var detail = $('evidence-detail');
+		if (panel) panel.classList.toggle('is-open', !!open);
+		if (btn) {
+			btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+			var label = btn.querySelector('span');
+			if (label) label.textContent = open ? '收起判定详情' : '展开判定详情';
+		}
+		if (detail) detail.open = !!open && !detail.classList.contains('is-hidden');
+	}
+
+	function hideEvidenceDetail() {
+		var d = $('evidence-detail');
+		if (d) d.classList.add('is-hidden');
+		var l = $('evidence-release-link');
+		if (l) l.classList.add('is-hidden');
+	}
+
+	function renderEvidenceLoading() {
+		setEvidenceState('检测中', 'busy');
+		setText('evidence-verdict', '正在连接 GitHub 并读取 Release 清单，请稍候…');
+		if ($('evidence-chips')) $('evidence-chips').innerHTML = '';
+		if ($('evidence-facts')) $('evidence-facts').innerHTML = '';
+		setEvidenceExpanded(false);
+		hideEvidenceDetail();
+	}
+
+	function renderEvidenceError(msg) {
+		setEvidenceState('检测异常', 'err');
+		setText('evidence-verdict', msg || '检测失败');
+		if ($('evidence-chips')) $('evidence-chips').innerHTML = '';
+		if ($('evidence-facts')) {
+			$('evidence-facts').innerHTML = factRow('错误信息', esc(msg || '检测失败'), { wide: true });
+		}
+		setEvidenceExpanded(false);
+		hideEvidenceDetail();
+	}
+
+	// 把检测结果拆成「结论 / 短标签 / 关键事实 / 可展开依据」四层。
+	// 长值（规则正则、板型、哈希）进入事实网格并允许任意换行，
+	// 不再挤在标题旁形成参差的标签流。
+	function renderEvidence(ci, res, lv, hasUpdate, sameVersion) {
+		var dev = res.device || {};
+		var ver = res.version || {};
+		var latest = res.latest || {};
+		var checks = (ci && ci.checks) || {};
+		var stateText = hasUpdate ? '发现新版本' : '已是最新';
+		var stateCls = 'ok';
+		if (lv === 'incompatible') { stateText = '固件不匹配'; stateCls = 'err'; }
+		else if (lv === 'warning') { stateText = '需人工核对'; stateCls = 'warn'; }
+		else if (lv === 'unknown') { stateText = '适配未知'; stateCls = 'warn'; }
+		else if (sameVersion) { stateText = '已是最新（同版本）'; stateCls = 'ok'; }
+		else if (ver.relation === 'older') { stateText = '目标版本更低'; stateCls = 'warn'; }
+		else if (hasUpdate && ver.state && ver.state !== 'decidable') { stateText = '发现新版本（依据较弱）'; stateCls = 'warn'; }
+		setEvidenceState(stateText, stateCls);
+
+		setText('evidence-verdict', res.reason || '检测完成');
+
+		var chips = [];
+		if (ci) {
+			var ccls = lv === 'compatible' ? 'ou-chip-ok'
+				: (lv === 'warning' || lv === 'unknown') ? 'ou-chip-warn' : 'ou-chip-err';
+			chips.push(tagChip(ci.badge || '适配评估', ccls, ci.reason || ''));
+		}
+		if (ver.relation) {
+			var rcls = ver.relation === 'newer' ? 'ou-chip-ok'
+				: ver.relation === 'older' ? 'ou-chip-err'
+				: ver.relation === 'same' ? '' : 'ou-chip-warn';
+			chips.push(tagChip(RELATION_TEXT[ver.relation] || ver.relation, rcls));
+		}
+		if (ver.state) {
+			chips.push(tagChip(STATE_TEXT[ver.state] || ver.state,
+				ver.state === 'decidable' ? 'ou-chip-ok' : 'ou-chip-warn', STATE_DESC[ver.state] || ''));
+		}
+		var chipsEl = $('evidence-chips');
+		if (chipsEl) chipsEl.innerHTML = chips.join('');
+
+		var facts = [];
+		var model = (ci && ci.detected_model) || dev.model || '未知';
+		var board = dev.board_name || dev.board_id || '—';
+		var arch = dev.arch || (ci && ci.detected_arch) || '未知';
+		var pkgArch = (dev.pkg_arch && dev.pkg_arch !== arch) ? '（' + dev.pkg_arch + '）' : '';
+		facts.push(factRow('本机身份',
+			'<span class="ou-fact-strong">' + esc(model) + '</span> · board ' + esc(board) +
+			' · ' + esc(arch) + esc(pkgArch), { wide: true }));
+
+		facts.push(factRow('机型通道',
+			'<span class="ou-fact-strong">' + esc(MODEL_CHECK_TEXT[checks.model] || '未比对') + '</span>' +
+			(ci && ci.detected_model ? ' · 识别为 ' + esc(ci.detected_model) : '')));
+
+		facts.push(factRow('架构通道',
+			'<span class="ou-fact-strong">' + esc(ARCH_CHECK_TEXT[checks.arch] || '未比对') + '</span>' +
+			' · 资产 ' + esc((ci && ci.asset_arch) || '未声明') +
+			' → 本机 ' + esc((ci && ci.device_arch) || '未知')));
+
+		var target = ver.target || latest.version || '未知';
+		var local = ver.local || '无法取到';
+		facts.push(factRow('版本通道',
+			'目标 <span class="ou-fact-strong">v' + esc(target) + '</span>' +
+			' · ' + esc(RELATION_TEXT[ver.relation] || '无法比较') +
+			' · 本地 ' + esc(local)));
+
+		var conf = CONFIDENCE_TEXT[ver.local_confidence] || ver.local_confidence || '未知';
+		var basisScore = (typeof ver.local_basis_score === 'number') ? ver.local_basis_score : null;
+		facts.push(factRow('本地版本依据',
+			esc(ver.local_source_text || ver.local_source || '来源未知') +
+			' · 可信度 <span class="ou-fact-strong">' + esc(conf) + '</span>' +
+			(basisScore !== null ? ' · 强度 <span class="ou-fact-strong">' + basisScore + '/100</span>' : '') +
+			(ver.state ? ' · ' + esc(STATE_TEXT[ver.state] || ver.state) : '')));
+
+		if (latest.version_evidence) {
+			facts.push(factRow('目标版本识别',
+				esc(latest.version_source || '来源未知') + ' · ' + esc(latest.version_evidence) +
+				(latest.version_fragment ? ' · 片段 <span class="ou-mono">' + esc(latest.version_fragment) + '</span>' : '')));
+		}
+
+		var hashVal;
+		if (latest.sha256) {
+			hashVal = esc((latest.sha256_source ? (HASH_SOURCE_TEXT[latest.sha256_source] || latest.sha256_source) : '来源未知')) +
+				' · <span class="ou-mono">' + esc(latest.sha256.substring(0, 16)) + '…</span>';
+		} else {
+			hashVal = '<span class="ou-fact-muted">无上游校验依据，下载后仅记录本地 SHA256</span>';
+		}
+		facts.push(factRow('校验依据', hashVal));
+
+		facts.push(factRow('发布信息',
+			'标签 ' + esc(res.resolved_tag || latest.version || '—') +
+			' · ' + esc(latest.updated_local || '—') +
+			' · ' + esc(latest.size_human || '—')));
+
+		if (ci && ci.matched_rule) {
+			facts.push(factRow('命中配置规则', esc(ci.matched_rule), { wide: true, mono: true }));
+		}
+		var factsEl = $('evidence-facts');
+		if (factsEl) factsEl.innerHTML = facts.join('');
+
+		var basis = (ci && ci.basis) || [];
+		if (ver.local_evidence) {
+			basis = basis.concat(String(ver.local_evidence).split('；').filter(Boolean).map(function (e) {
+				return '版本依据：' + e;
+			}));
+		}
+		if (ver.local_advice) basis = basis.concat(['版本建议：' + ver.local_advice]);
+		if (latest.tag_version && typeof latest.tag_version_agree === 'boolean') {
+			basis = basis.concat(['标签 ' + latest.tag_version + ' 与目标版本 ' +
+				(ver.target || latest.version || '未知') +
+				(latest.tag_version_agree ? ' 一致' : ' 不一致（以资产名为准，建议核对）')]);
+		}
+		var detail = $('evidence-detail');
+		var list = $('evidence-basis');
+		if (list) {
+			list.innerHTML = basis.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('');
+		}
+		if ($('evidence-basis-count')) {
+			$('evidence-basis-count').textContent = basis.length + ' 条';
+		}
+		if (detail) detail.classList.toggle('is-hidden', basis.length === 0);
+
+		var link = $('evidence-release-link');
+		if (link) {
+			if (res.release_url) {
+				link.href = res.release_url;
+				link.classList.remove('is-hidden');
+			} else {
+				link.classList.add('is-hidden');
+			}
+		}
+		setEvidenceExpanded(false);
+	}
+
+	function renderCheckResult(res) {
+		lastCheck = res;
+		var badge = $('status-badge');
+		var box = $('check-result-box');
+		if (!res || res.ok !== true) {
+			var errText = (res && res.error) ? res.error : '检测失败';
+			hint('check-result', errText, 'err');
+			if (box) box.className = 'ou-notice-box err';
+			if (badge) {
+				badge.className = 'ou-status-pill err';
+				badge.innerHTML = '<span class="ou-dot err"></span> 检测异常';
+			}
+			renderEvidenceError(errText);
+			showBtn('btn-force', true);
+			showBtn('btn-upgrade', false);
+			return;
+		}
+
+		var latest = res.latest || {};
+		setText('latest-name', latest.name);
+		setText('new-ver', latest.version || res.resolved_tag || '未解析版本');
+		setText('latest-size', latest.size_human);
+		setText('latest-time', latest.updated_local);
+
+		var hashStatus = $('latest-hash-status');
+		if (hashStatus) {
+			if (latest.sha256) {
+				var shortH = latest.sha256.substring(0, 8) + '...' +
+					latest.sha256.substring(latest.sha256.length - 8);
+					hashStatus.textContent = 'SHA256: ' + shortH;
+					hashStatus.title = '完整 SHA256: ' + latest.sha256 + ' (来源: ' +
+						(HASH_SOURCE_TEXT[latest.sha256_source] || latest.sha256_source || '未知') + ')';
+			} else {
+				// 上游既没有校验单也没有正文哈希时，下载后只能记录本地哈希，
+				// 不能对外宣称「已校验」，否则等于给出虚假的安全承诺。
+				hashStatus.textContent = '无校验依据，仅记录本地哈希';
+				hashStatus.title = '上游未提供校验清单或期望哈希，下载后只记录本地 SHA256，无法比对校验';
+			}
+		}
+
+		var ci = res.compatibility || null;
+		var lv = compatLevel(ci);
+		var compatBadgeEl = $('latest-compat-badge');
+		if (compatBadgeEl) {
+			if (ci) {
+				var cls = lv === 'compatible' ? 'ok'
+					: (lv === 'warning' || lv === 'unknown') ? 'warn' : 'err';
+				compatBadgeEl.innerHTML = '<span class="ou-compat-chip ' + cls + '">' +
+					esc(ci.badge || '适配评估') + '</span>';
+				compatBadgeEl.title = ci.reason || '';
+			} else {
+				compatBadgeEl.textContent = '未经适配判定';
+			}
+		}
+
+		var hasUpdate = res.has_update === true;
+		var ver = res.version || null;
+		var sameVersion = !!(ver && ver.relation === 'same');
+		renderEvidence(ci, res, lv, hasUpdate, sameVersion);
+
+		var msg;
+		var lvl;
+
+		if (lv === 'incompatible') {
+			msg = '固件与本机不匹配，已阻止升级: ' + (ci.reason || '');
+			lvl = 'err';
+			if (badge) {
+				badge.className = 'ou-status-pill err';
+				badge.innerHTML = '<span class="ou-dot err"></span> 固件不匹配';
+			}
+		} else if (lv === 'warning' || lv === 'unknown') {
+			msg = '尚未确认固件适配本机，已停止升级：' + (ci && ci.reason || '缺少机型依据');
+			lvl = 'warn';
+			if (badge) {
+				badge.className = 'ou-status-pill update';
+				badge.textContent = '未确认适配';
+			}
+		} else if (sameVersion) {
+			// 同版本：不出现「有新版本 / 发现更新」引导，也不把普通升级按钮当成主操作，
+			// 只保留显式点击的重装 / 切换版本（同版本重装）。详细依据放在证据面板，
+			// 这里只给下一步动作，避免同一句话重复两遍。
+			msg = '无需升级：当前固件与 Release 同版本。如需同版本重装，请点击「重装 / 切换版本」。';
+			if (ver.state === 'suspect') msg += ' 本地版本依据较弱，仅供参考。';
+			lvl = 'ok';
+			if (badge) {
+				badge.className = 'ou-status-pill ok';
+				badge.innerHTML = '<span class="ou-dot ok"></span> 已是最新（同版本）';
+			}
+		} else if (hasUpdate) {
+			var v = ver || {};
+			if (v.state === 'incomparable') {
+				// 取不到本地版本号不等于「不能升级」：明确说明依据后放行，
+				// 但把仍然生效的安全闸一起讲清楚，避免用户以为跳过了校验。
+				msg = (res.reason || ('将升级到 ' + (v.target || '该发布版本'))) +
+					'。这不会跳过任何安全检查：机型匹配、架构匹配与 SHA-256 校验照旧生效。';
+				lvl = 'warn';
+				if (badge) {
+					badge.className = 'ou-status-pill update';
+					badge.innerHTML = '<span class="ou-dot update"></span> 有新版本（版本无法比较）';
+				}
+			} else if (v.state === 'suspect') {
+				msg = (res.reason || '发现新版本') +
+					'。本地版本依据较弱，建议核对后再升级。';
+				lvl = 'warn';
+				if (badge) {
+					badge.className = 'ou-status-pill update';
+					badge.innerHTML = '<span class="ou-dot update"></span> 有新版本（依据较弱）';
+				}
+			} else {
+				msg = '发现新版本 v' + (v.target || latest.version || '') + '，可点击「立即升级」开始更新。';
+				lvl = 'ok';
+				if (badge) {
+					badge.className = 'ou-status-pill update';
+					badge.innerHTML = '<span class="ou-dot update"></span> 有新版本';
+				}
+			}
+		} else {
+			// 目标版本低于当前时 has_update=false，但这不是「已是最新」：
+			// 必须明确告诉用户「不执行降级」，并保留重装 / 切换版本入口的解释。
+			if (ver && ver.relation === 'older') {
+				msg = res.reason || '目标版本低于当前版本，不执行降级；如确需降级请使用「重装 / 切换版本」。';
+				lvl = 'warn';
+				if (badge) {
+					badge.className = 'ou-status-pill update';
+					badge.innerHTML = '<span class="ou-dot update"></span> 不执行降级';
+				}
+			} else {
+				msg = res.reason || '已是最新版本';
+				lvl = 'ok';
+				if (badge) {
+					badge.className = 'ou-status-pill ok';
+					badge.innerHTML = '<span class="ou-dot ok"></span> 已是最新';
+				}
+			}
+		}
+
+		hint('check-result', msg, lvl);
+		if (box) box.className = 'ou-notice-box' + (lvl === 'ok' ? ' ok' : (lvl === 'err' ? ' err' : ''));
+		showBtn('btn-upgrade', lv === 'compatible' && hasUpdate && !sameVersion);
+		if ($('btn-force')) {
+			showBtn('btn-force', lv === 'compatible');
+			$('btn-force').title = sameVersion
+				? '当前固件与 Release 同版本：这是同版本重装，不是升级，仅在你需要重刷固件时手动使用'
+				: (ver && ver.relation === 'older'
+					? '目标版本低于当前固件，将切换到所选历史版本'
+					: (lv === 'compatible'
+						? '即使已是最新版本也重新下载刷写'
+						: '必须通过机型和 SHA256 校验后才可刷写'));
+			setBusy('btn-force', false, forceLabel());
+		}
+	}
+
+	function runCheck() {
+		try { window.H5000MOTA.assertReady(); }
+		catch (e) { hint('check-result', e.message, 'warn'); return; }
+		setBusy('btn-check', true, '检查中...');
+		setBusy('btn-upgrade', true);
+		setBusy('btn-force', true);
+		hint('check-result', '正在连接云端检查固件更新...');
+		renderEvidenceLoading();
+		var box = $('check-result-box');
+		if (box) box.className = 'ou-notice-box';
+		var badge = $('status-badge');
+		if (badge) {
+			badge.className = 'ou-status-pill update';
+			badge.innerHTML = '<span class="ou-dot update"></span> 检测中';
+		}
+		stopPoll();
+		var skipped = 0;
+
+		function finishCheck() {
+			stopPoll();
+			refreshLog();
+			setBusy('btn-check', false, '检查更新');
+			setBusy('btn-upgrade', false, '立即升级');
+			setBusy('btn-force', false, forceLabel());
+		}
+
+		snapshotStatus().then(function () {
+			pollFilter = true;
+			return ubus('check');
+		}).then(function (r) {
+			// ubus 在 result[0]==0 时直接 resolve 业务 payload，撞锁的
+			// {ok:false,error} 不会 reject；不判 ok 就会把「没启动」当成「已启动」，
+			// 白等 20 秒后只给一句泛化提示。
+			if (r && r.ok === false) {
+				hint('check-result', r.error || '检测未能启动', 'err');
+				renderEvidenceError(r.error || '检测未能启动');
+				if (box) box.className = 'ou-notice-box err';
+				finishCheck();
+				return;
+			}
+			function checkTick() {
+				if (skipped > 20) {
+					hint('check-result', '未读取到本次检测的状态，可能有另一个操作正在进行，详见运行日志', 'err');
+					finishCheck();
+					return;
+				}
+				ubus('get_status').then(function (st) {
+					if (pollFilter) {
+						if (!isFreshRun(st)) { skipped++; return; }
+						pollFilter = false;
+					}
+					if (st.stage === 'check_done' && st.result) {
+						renderCheckResult(st.result);
+						finishCheck();
+						// 「检查更新」已在后端先刷新四套远程状态，这里直接重读缓存，
+						// 让「远程状态与统一诊断」跟本次检测同步更新。
+						loadStates();
+					} else if (st.stage === 'check_failed' || st.stage === 'failed') {
+						renderCheckResult({ ok: false, error: st.error || st.msg || '检测失败' });
+						finishCheck();
+						loadStates();
+					}
+				}).catch(function () { /* transient rpc errors during poll: ignore */ });
+			}
+			checkTick();
+			pollTimer = setInterval(checkTick, 1000);
+		}).catch(function (e) {
+			hint('check-result', '检测请求失败: ' + e.message, 'err');
+			renderEvidenceError('检测请求失败: ' + e.message);
+			if (box) box.className = 'ou-notice-box err';
+			finishCheck();
+		});
+	}
+
+	/* ---------------- 升级流程 ---------------- */
+
+	function showRebootOverlay() {
+		stopPoll();
+		var ov = $('reboot-overlay');
+		if (!ov || ov.style.display === 'flex') return;
+		ov.style.display = 'flex';
+		var seconds = 120;
+		var cd = $('reboot-countdown');
+		cd.textContent = seconds;
+		var timer = setInterval(function () {
+			seconds--;
+			if (cd) cd.textContent = Math.max(seconds, 0);
+		}, 1000);
+
+		// 轮询直到路由器重新响应（LAN IP 可能变化，因此同时尝试主机名与常见网关地址）
+		var targets = [location.origin, 'http://immortalwrt.lan', 'http://192.168.1.1'];
+		var t = 0;
+		var ping = setInterval(function () {
+			fetch(targets[t % targets.length] + '/cgi-bin/luci/', {
+				method: 'HEAD', cache: 'no-store',
+				signal: (function () { var c = new AbortController(); setTimeout(function () { c.abort(); }, 3000); return c.signal; })()
+			}).then(function () {
+				clearInterval(ping);
+				clearInterval(timer);
+				location.href = targets[t % targets.length] + '/cgi-bin/luci/admin/system/online_upgrade';
+			}).catch(function () { t++; });
+		}, 3000);
+	}
+
+	var STAGE_TEXT = {
+		checking: '正在检查固件更新...',
+		check_done: '检测完成',
+		check_failed: '检测失败',
+		downloading: '正在下载固件...',
+		paused: '下载已暂停，点击「继续」恢复',
+		downloaded: '固件下载完成',
+		saving: '记录固件版本...',
+		backing_up: '正在创建配置备份...',
+		backup_done: '备份完成',
+		flashing: '正在刷写固件，即将重启…',
+		restore_done: '配置恢复完成',
+		aborted: '下载已取消',
+		failed: '操作失败'
+	};
+
+	function updatePipeline(stage) {
+		var sEnv = $('step-env'), sDl = $('step-dl'), sBackup = $('step-backup'), sFlash = $('step-flash');
+		if (!sEnv || !sDl || !sBackup || !sFlash) return;
+		[sEnv, sDl, sBackup, sFlash].forEach(function (el) { el.className = 'ou-step-node'; });
+		if (stage === 'checking' || stage === 'check_done') {
+			sEnv.className = 'ou-step-node active';
+		} else if (stage === 'downloading') {
+			sEnv.className = 'ou-step-node done';
+			sDl.className = 'ou-step-node active';
+		} else if (stage === 'downloaded' || stage === 'saving' || stage === 'backing_up' || stage === 'backup_done') {
+			sEnv.className = 'ou-step-node done';
+			sDl.className = 'ou-step-node done';
+			sBackup.className = 'ou-step-node active';
+		} else if (stage === 'flashing' || stage === 'restore_done') {
+			sEnv.className = 'ou-step-node done';
+			sDl.className = 'ou-step-node done';
+			sBackup.className = 'ou-step-node done';
+			sFlash.className = 'ou-step-node active';
+		}
+	}
+
+	function renderProgress(st) {
+		if (!$('card-progress')) return;
+		$('card-progress').style.display = '';
+		$('progress-bar').style.width = (st.pct || 0) + '%';
+		$('progress-pct').textContent = (st.pct || 0) + '%';
+		$('progress-text').textContent = (st.error ? (' ' + st.error) : (st.msg || STAGE_TEXT[st.stage] || st.stage));
+		updatePipeline(st.stage);
+	}
+
+	function pollUpgrade() {
+		stopPoll();
+		var skipped = 0;
+		var ticks = 0;
+		function tick() {
+			Promise.all([ubus('get_status'), ubus('get_log')]).then(function (rs) {
+				var st = rs[0], lg = rs[1];
+				if (pollFilter) {
+					if (!isFreshRun(st)) {
+						if (++skipped > 20) {
+							stopPoll();
+							hint('check-result', '未读取到本次任务的状态，可能有另一个操作正在进行，详见运行日志', 'err');
+						}
+						return;
+					}
+					pollFilter = false;
+				}
+				if (lg && lg.log) {
+					renderLog(lg.log);
+				}
+				renderProgress(st);
+				ticks++;
+				if (ticks % 3 === 0) refreshTasks();
+				if (st.stage === 'flashing') {
+					showRebootOverlay();
+				} else if (st.stage === 'failed') {
+					stopPoll();
+					setBusy('btn-check', false, '检查更新');
+					showBtn('btn-force', true);
+					$('card-progress').style.display = 'none';
+					hint('check-result', '操作失败: ' + (st.error || '未知错误'), 'err');
+					// 把停止原因（慢速证据、用户取消等）同步显示在任务卡片中，
+					// 并刷新最终的历史任务状态。
+					if (st.error) hint('task-hint', ' ' + st.error, 'err');
+					refreshTasks();
+				}
+			}).catch(function () { /* keep polling; device may reboot mid-poll */ });
+		}
+		tick();
+		pollTimer = setInterval(tick, 1000);
+	}
+
+	function startUpgrade(isForce) {
+		try { window.H5000MOTA.assertReady(); }
+		catch (e) { hint('check-result', e.message, 'warn'); return; }
+		var ci = lastCheck && lastCheck.compatibility;
+		var same = sameVersionChecked();
+		if (!ci || !ci.can_upgrade || compatLevel(ci) !== 'compatible') {
+			hint('check-result', '目标固件尚未通过机型适配检查，请重新检查，升级已停止。', 'err');
+			return;
+		}
+		if (!isForce && same) {
+			hint('check-result', '当前与目标为同一构建版本，如需重新刷写请点击“同版本重装”。', 'warn');
+			return;
+		}
+		ubus('h5000m_policy').then(function (policy) {
+			if (!policy || policy.ok !== true) throw new Error('无法确认配置保留策略');
+			var keep = policy.can_keep === true && policy.keep_config === true;
+			var message = '目标：' + policy.tag + '\n' + (keep
+				? '本次保留配置：当前与目标的驱动、模组方案相同，将备份并恢复配置。'
+				: '本次清空全部配置，升级后恢复出厂设置。') +
+				'\n' + (isForce ? '已选择重装或切换历史构建。' : '') +
+				'机型、镜像预检和 SHA256 校验通过后才会刷写。\n请勿断电！';
+			return ouConfirm({
+				tone: keep ? 'primary' : 'danger',
+				eyebrow: keep ? '保留同方案配置' : '清空配置更新',
+				title: isForce ? (same ? '同版本重装固件' : '切换所选固件版本') : '开始固件升级',
+				message: message,
+				confirmText: keep ? '确认保留配置并升级' : '确认清空配置并刷写'
+			});
+		}).then(function (ok) { if (ok) doStartUpgrade(isForce); })
+		.catch(function (e) { hint('check-result', e.message, 'err'); });
+	}
+
+	function doStartUpgrade(isForce) {
+		var same = sameVersionChecked();
+		setBusy('btn-upgrade', true, '启动中...');
+		setBusy('btn-force', true, '启动中...');
+		stopPoll();
+		snapshotStatus().then(function () {
+			pollFilter = true;
+			return ubus('start_upgrade', { force: isForce === true });
+		}).then(function (r) {
+			// 同上：撞锁时后端返回 {ok:false,error}，ubus 不会 reject。若按「已启动」
+			// 继续，两个按钮会被隐藏并进入对别的任务的无效轮询，页面卡死只能刷新。
+			if (r && r.ok === false) {
+				// 撞锁失败恢复按钮时也要维持「同版本不摆普通升级入口」的口径
+				showBtn('btn-upgrade', !same);
+				showBtn('btn-force', true);
+				setBusy('btn-upgrade', false, '立即升级');
+				setBusy('btn-force', false, forceLabel());
+				$('card-progress').style.display = 'none';
+				hint('check-result', r.error || '升级未能启动', 'err');
+				return;
+			}
+			showBtn('btn-upgrade', false);
+			showBtn('btn-force', false);
+			setBusy('btn-upgrade', false, '立即升级');
+			setBusy('btn-force', false, forceLabel());
+			$('card-progress').style.display = '';
+			pollUpgrade();
+		}).catch(function (e) {
+			setBusy('btn-upgrade', false, '立即升级');
+			setBusy('btn-force', false, forceLabel());
+			hint('check-result', '升级请求失败: ' + e.message, 'err');
+		});
+	}
+
+	/* ---------------- 下载任务 ---------------- */
+
+	var taskTimer = null;
+	var taskActive = null;
+	var taskDetailTimer = null;
+
+	function stopTaskDetail() {
+		if (taskDetailTimer) {
+			clearInterval(taskDetailTimer);
+			taskDetailTimer = null;
+		}
+	}
+
+	function taskDetailHtml(t) {
+		var total = Number(t.chunks_total) || 0;
+		var states = t.chunk_states || '';
+		var pct = t.total > 0 ? Math.min(100, Math.round(t.done / t.total * 100)) : 0;
+		var cells = '';
+		var limit = Math.min(total, 600);
+		for (var i = 0; i < limit; i++) {
+			var s = states.charAt(i);
+			var cls = s === 'D' ? 'done' : s === 'R' ? 'running' : 'pending';
+			cells += '<span class="ou-chunk-cell ' + cls + '" title="分块 ' + (i + 1) + ' · ' +
+				(cls === 'done' ? '完成' : cls === 'running' ? '传输中' : '等待') + '"></span>';
+		}
+		var chunkBlock = total > 0
+			? '<div class="ou-chunk-panel">' +
+				'<div class="ou-chunk-head"><span>分块状态（已显示 ' + limit + ' / ' + total + '）</span>' +
+				'<span class="ou-chunk-legend"><i class="done"></i>完成 <i class="running"></i>传输中 <i class="pending"></i>等待</span></div>' +
+				'<div class="ou-chunk-grid">' + cells + '</div></div>'
+			: '<div class="ou-dialog-detail">该任务没有分块明细（旧任务或单流下载）。</div>';
+		return '<div class="ou-task-detail" id="ou-task-detail-body">' +
+			'<div class="ou-task-detail-grid">' +
+				'<div class="ou-task-detail-item"><span>类型</span><strong>' + esc(t.kind === 'plugin' ? '插件更新' : '固件下载') + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>状态</span><strong>' + esc(taskDisplayState(t)) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>进度</span><strong>' + pct + '% · ' + esc(fmtSize(t.done)) + ' / ' + esc(fmtSize(t.total)) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>实时速度</span><strong>' + esc(fmtSpeed(t.speed_bps)) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>线程</span><strong>' + (t.segments || 0) + ' / ' + (t.workers || 0) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>分块</span><strong>' + (t.chunks_done || 0) + ' / ' + (t.chunks_total || 0) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>分块大小</span><strong>' + esc(t.chunk_size ? fmtSize(t.chunk_size) : '—') + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>传输中分块</span><strong>' + (t.chunks_running || 0) + '</strong></div>' +
+				'<div class="ou-task-detail-item"><span>原因 / 阶段</span><strong>' + esc(t.reason || '—') + '</strong></div>' +
+			'</div>' + chunkBlock + '</div>';
+	}
+
+	function showTaskDetail(id) {
+		stopTaskDetail();
+		var render = function (t) {
+			var body = $('ou-task-detail-body');
+			if (!body) return;
+			if (!t) {
+				body.innerHTML = '<div class="ou-dialog-detail">任务已被清理或删除。</div>';
+				return;
+			}
+			body.outerHTML = taskDetailHtml(t);
+		};
+		ouDialog({
+			tone: 'primary',
+			eyebrow: '下载任务',
+			title: '任务详情',
+			html: '<div class="ou-task-detail" id="ou-task-detail-body"><div class="ou-dialog-detail">正在读取任务...</div></div>',
+			alertOnly: true,
+			confirmText: '关闭',
+			wide: true,
+			onClose: stopTaskDetail
+		});
+		var refresh = function () {
+			ubus('list_tasks').then(function (r) {
+				var list = (r && r.tasks) || [];
+				var task = null;
+				for (var i = 0; i < list.length; i++) {
+					if (list[i].id === id) { task = list[i]; break; }
+				}
+				render(task);
+			}).catch(function () { /* keep last snapshot */ });
+		};
+		refresh();
+		taskDetailTimer = setInterval(refresh, 2000);
+	}
+
+	function taskStateLabel(s) {
+		var m = {
+			running: '下载中', paused: '已暂停', done: '已完成',
+			failed: '失败', aborted: '已停止'
+		};
+		return m[s] || s || '未知';
+	}
+
+	// 插件任务在下载完成后还要校验与安装；用 reason 展示当前阶段，
+	// 避免任务表一直显示“下载中”。
+	function taskDisplayState(t) {
+		if (t && t.kind === 'plugin' && t.state === 'running') {
+			var reason = t.reason || '';
+			// 注意“安装包”是下载阶段的文案，不能因此误判为安装中；
+			// 只有“正在安装/安装插件包”才进入安装阶段。
+			if (reason.indexOf('正在安装') >= 0 || reason.indexOf('安装插件包') >= 0) return '安装中';
+			if (reason.indexOf('校验') >= 0) return '校验中';
+			return '下载中';
+		}
+		return taskStateLabel(t && t.state);
+	}
+
+	function fmtSpeed(bps) {
+		var n = Number(bps || 0);
+		if (n <= 0) return '—';
+		if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB/s';
+		return (n / 1024).toFixed(1) + ' KB/s';
+	}
+
+	function syncTaskButtons(active, anyRunning) {
+		var busy = !!active;
+		// 插件更新任务也占用后端操作锁，因此任何任务运行期间都不应
+		// 再启动新的固件下载；暂停/继续/取消仍只针对固件任务。
+		setBusy('btn-start-download', busy || !!anyRunning, '开始下载');
+		setBusy('btn-pause-download', active !== 'running', '暂停');
+		setBusy('btn-resume-download', active !== 'paused', '继续');
+		setBusy('btn-cancel-download', !busy, '取消');
+	}
+
+	var taskPluginRunning = false;
+
+	function renderTasks(list) {
+		var tbody = $('task-table').querySelector('tbody');
+		tbody.innerHTML = '';
+		var active = null;
+		var anyRunning = false;
+		var pluginRunning = false;
+		(list || []).forEach(function (t) {
+			var isPlugin = t.kind === 'plugin';
+			var running = t.state === 'running' || t.state === 'paused';
+			if (running) {
+				anyRunning = true;
+				if (isPlugin) pluginRunning = true;
+				// 固件下载控制按钮只跟随固件任务；插件任务由更新流程自动管理。
+				if (!isPlugin) active = t.state;
+			}
+			var pct = t.total > 0 ? Math.min(100, Math.round(t.done / t.total * 100)) : 0;
+			var progress = (running)
+				? (pct + '% · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total))
+				: (pct + '% · ' + fmtSize(t.done));
+			var kindChip = isPlugin
+				? '<span class="ou-task-kind plugin">插件更新</span>'
+				: '';
+			var meta = (t.chunks_total > 0)
+				? ('线程 ' + (t.segments || 0) + '/' + (t.workers || 0) +
+					' · 分块 ' + (t.chunks_done || 0) + '/' + t.chunks_total)
+				: '';
+			var infoBtn = '<button type="button" class="btn ou-btn ou-btn-default ou-task-info" data-id="' +
+				esc(t.id) + '"><span>详情</span></button>';
+			var action = infoBtn + (isPlugin && running
+				? '<span class="ou-time-text">自动更新中</span>'
+				: '<button type="button" class="btn ou-btn ou-btn-danger ou-task-del" data-id="' + esc(t.id) + '"><span>删除</span></button>');
+			var tr = document.createElement('tr');
+				tr.innerHTML = '<td><div class="ou-file-cell"><span class="ou-file-text">' + esc(t.name) + '</span>' + kindChip + '</div></td>' +
+				'<td data-label="状态"><span class="ou-badge-size">' + esc(taskDisplayState(t)) + ' · ' + esc(progress) + '</span>' +
+				(meta ? '<span class="ou-task-meta">' + esc(meta) + '</span>' : '') + '</td>' +
+				'<td data-label="速度"><span class="ou-time-text">' + esc(fmtSpeed(t.speed_bps)) + '</span></td>' +
+				'<td data-label="原因"><span class="ou-time-text">' + esc(t.reason || '—') + '</span></td>' +
+				'<td data-label="操作" style="text-align:right">' + action + '</td>';
+			var del = tr.querySelector('.ou-task-del');
+			if (del) del.addEventListener('click', function () { deleteTask(t.id, t.state); });
+			var info = tr.querySelector('.ou-task-info');
+			if (info) info.addEventListener('click', function () { showTaskDetail(t.id); });
+			tbody.appendChild(tr);
+		});
+		if (!list || !list.length) {
+			tbody.innerHTML = '<tr><td colspan="5" class="ou-empty">暂无下载任务</td></tr>';
+		}
+		taskActive = active;
+		syncTaskButtons(active, anyRunning);
+		// 插件更新任务刚结束（完成/失败/崩溃收敛）时，把状态同步到插件卡片与诊断层，
+		// 避免任务已结束而其他面板还停在“更新中”。
+		if (taskPluginRunning && !pluginRunning) {
+			ubus('get_plugin_status').then(function (st) {
+				if (typeof renderPluginStatus === 'function') renderPluginStatus(st);
+			}).catch(function () { /* 尽力刷新，不阻断任务列表 */ });
+			loadStates();
+			setTimeout(refreshTasks, 1200);
+		}
+		taskPluginRunning = pluginRunning;
+		// 任意运行中的任务都需要刷新列表（插件任务没有暂停/取消按钮，
+		// 但必须持续展示下载/安装阶段和最终状态）。
+		if (anyRunning && !taskTimer) {
+			taskTimer = setInterval(refreshTasks, 3000);
+		} else if (!anyRunning && taskTimer) {
+			clearInterval(taskTimer);
+			taskTimer = null;
+		}
+	}
+
+	function refreshTasks() {
+		return ubus('list_tasks').then(function (r) {
+			renderTasks(r && r.tasks ? r.tasks : []);
+		}).catch(function (e) {
+			hint('task-hint', ' 任务列表读取失败: ' + e.message, 'err');
+		});
+	}
+
+	function taskCommand(method, label) {
+		return ubus(method).then(function (r) {
+			if (r && r.ok === false) hint('task-hint', ' ' + (r.error || (label + '失败')), 'err');
+			else hint('task-hint', ' ' + label + '已生效', 'ok');
+			return refreshTasks();
+		}).catch(function (e) {
+			hint('task-hint', ' ' + label + '请求失败: ' + e.message, 'err');
+		});
+	}
+
+	function startDownload() {
+		try { window.H5000MOTA.assertReady(); }
+		catch (e) { hint('task-hint', e.message, 'warn'); return; }
+		setBusy('btn-start-download', true, '启动中...');
+		snapshotStatus().then(function () {
+			pollFilter = true;
+			return ubus('start_download');
+		}).then(function (r) {
+			if (r && r.ok === false) {
+				hint('task-hint', ' ' + (r.error || '下载未能启动'), 'err');
+				return refreshTasks();
+			}
+			hint('task-hint', ' 下载任务已启动', 'ok');
+			$('card-progress').style.display = '';
+			pollUpgrade();
+			return refreshTasks();
+		}).catch(function (e) {
+			hint('task-hint', ' 启动下载失败: ' + e.message, 'err');
+			return refreshTasks();
+		});
+	}
+
+	function deleteTask(id, state) {
+		var busy = (state === 'running' || state === 'paused');
+		if (busy) {
+			ouAlert({
+				tone: 'warning',
+				eyebrow: '任务管理',
+				title: '任务仍在进行中',
+				message: '请先点击「取消」停止任务，再删除历史记录。',
+				detail: id
+			});
+			return;
+		}
+		ouConfirm({
+			tone: 'danger',
+			eyebrow: '任务管理',
+			title: '删除下载任务',
+			message: '删除后不可恢复；若已无「已完成」记录，会一并清理临时固件文件。',
+			detail: id,
+			confirmText: '删除任务'
+		}).then(function (ok) {
+			if (!ok) return;
+			ubus('delete_task', { id: id }).then(function (r) {
+				if (r && r.ok) {
+					hint('task-hint', ' 已删除任务 ' + id +
+						(r.files_removed ? '（清理 ' + r.files_removed + ' 个临时文件）' : ''), 'ok');
+				} else {
+					hint('task-hint', ' ' + (r && r.error ? r.error : '删除失败'), 'err');
+				}
+				return refreshTasks();
+			}).catch(function (e) {
+				hint('task-hint', ' 删除失败: ' + e.message, 'err');
+			});
+		});
+	}
+
+	/* ---------------- 备份与恢复 ---------------- */
+
+	function refreshBackups() {
+		ubus('list_backups').then(function (r) {
+			var tbody = $('backup-table').querySelector('tbody');
+			tbody.innerHTML = '';
+			if (!r.backups || !r.backups.length) {
+				tbody.innerHTML = '<tr><td colspan="4" class="ou-empty">' +
+					'<div class="ou-empty-box">' +
+					'<svg class="ou-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>' +
+					'<div class="ou-empty-title">暂无历史配置备份</div>' +
+					'<div class="ou-empty-sub">升级前后系统将自动创建快照，您也可以点击上方「创建备份」快速保存</div>' +
+					'</div></td></tr>';
+				hint('backup-hint', '');
+				return;
+			}
+			r.backups.forEach(function (b) {
+				var tr = document.createElement('tr');
+				tr.innerHTML = '<td><div class="ou-file-cell">' +
+					'<svg class="ou-file-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>' +
+					'<span class="ou-file-text">' + esc(b.name) + '</span></div></td>' +
+					'<td><span class="ou-badge-size">' + fmtSize(b.size) + '</span></td>' +
+					'<td><span class="ou-time-text">' + fmtTime(b.mtime) + '</span></td>' +
+					'<td style="text-align:right"><button type="button" class="btn ou-btn ou-btn-danger ou-del-btn" data-path="' + esc(b.path) + '">' +
+					'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ou-btn-svg"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+					'<span>删除</span></button></td>';
+				tr.querySelector('.ou-del-btn').addEventListener('click', function () { deleteBackup(b.path); });
+				tbody.appendChild(tr);
+			});
+			hint('backup-hint', '最新备份: ' + r.backups[0].path, 'ok');
+		}).catch(function (e) {
+			hint('backup-hint', ' ' + e.message, 'err');
+		});
+	}
+
+	function runBackup() {
+		setBusy('btn-backup', true, '备份中...');
+		ubus('backup').then(function (r) {
+			if (r && r.ok) hint('backup-hint', ' 备份成功: ' + r.path + ' (' + r.size_human + ', ' + r.files + ' 个文件)', 'ok');
+			else hint('backup-hint', ' ' + (r && r.error ? r.error : '备份失败'), 'err');
+			refreshBackups();
+		}).catch(function (e) {
+			hint('backup-hint', ' ' + e.message, 'err');
+		}).finally(function () {
+			setBusy('btn-backup', false, '创建备份');
+		});
+	}
+
+	function deleteBackup(path) {
+		ouConfirm({
+			tone: 'danger',
+			eyebrow: '配置备份',
+			title: '删除备份文件',
+			message: '删除后不可恢复。',
+			detail: path,
+			confirmText: '删除备份'
+		}).then(function (ok) {
+			if (!ok) return;
+			ubus('delete_backup', { path: path }).then(function (r) {
+				if (r && r.ok) hint('backup-hint', ' 已删除 ' + path, 'ok');
+				else hint('backup-hint', ' ' + (r && r.error ? r.error : '删除失败'), 'err');
+				refreshBackups();
+			}).catch(function (e) {
+				hint('backup-hint', ' ' + e.message, 'err');
+			});
+		});
+	}
+
+	function downloadBackup() {
+		ubus('list_backups').then(function (r) {
+			if (!r.backups || !r.backups.length) {
+				hint('backup-hint', '暂无备份可下载', 'err');
+				return;
+			}
+			var b = r.backups[0];
+			var form = document.createElement('form');
+			form.method = 'POST';
+			form.action = '/cgi-bin/cgi-download';
+			form.style.display = 'none';
+			form.innerHTML =
+				'<input type="hidden" name="sessionid" value="' + esc(SID) + '">' +
+				'<input type="hidden" name="path" value="' + esc(b.path) + '">' +
+				'<input type="hidden" name="filename" value="' + esc(b.name) + '">';
+			document.body.appendChild(form);
+			form.submit();
+			setTimeout(function () { form.remove(); }, 5000);
+		}).catch(function (e) {
+			hint('backup-hint', ' ' + e.message, 'err');
+		});
+	}
+
+	function autoRestore() {
+		ubus('list_backups').then(function (r) {
+			if (!r.backups || !r.backups.length) {
+				hint('backup-hint', '未找到 /root/ 下的备份文件', 'err');
+				return;
+			}
+			var b = r.backups[0];
+			ouConfirm({
+				tone: 'warning',
+				eyebrow: '配置恢复',
+				title: '从备份恢复配置',
+				message: '将使用 tar 解压覆盖 / 下所有配置文件，建议恢复后重启路由器。',
+				detail: b.path,
+				confirmText: '开始恢复'
+			}).then(function (ok) {
+				if (!ok) return;
+				setBusy('btn-auto-restore', true, '恢复中...');
+				ubus('restore', { path: b.path }).then(function (res) {
+					if (res && res.ok) hint('backup-hint', ' 配置已恢复,建议重启路由器', 'ok');
+					else hint('backup-hint', ' ' + (res && res.error ? res.error : '恢复失败'), 'err');
+				}).catch(function (e) {
+					hint('backup-hint', ' ' + e.message, 'err');
+				}).finally(function () {
+					setBusy('btn-auto-restore', false, '自动恢复');
+				});
+			});
+		}).catch(function (e) {
+			hint('backup-hint', ' ' + e.message, 'err');
+		});
+	}
+
+	function manualRestorePick() { $('manual-backup-file').click(); }
+
+	function manualRestoreUpload(ev) {
+		var file = ev.target.files[0];
+		ev.target.value = '';
+		if (!file) return;
+		if (!/\.(tar\.gz|tgz|gz)$/i.test(file.name)) {
+			hint('backup-hint', ' 请选择 .tar.gz 格式的备份文件', 'err');
+			return;
+		}
+		ouConfirm({
+			tone: 'warning',
+			eyebrow: '手动恢复',
+			title: '上传并恢复配置',
+			message: '上传后会立即使用该备份覆盖当前配置，建议恢复后重启路由器。',
+			detail: file.name + ' · ' + fmtSize(file.size),
+			confirmText: '上传并恢复'
+		}).then(function (ok) {
+			if (!ok) return;
+			var fd = new FormData();
+			fd.append('sessionid', SID);
+			fd.append('filename', '/tmp/restore-upload.tar.gz');
+			fd.append('filemode', '0600');
+			fd.append('filedata', file, file.name);
+			setBusy('btn-manual-restore', true, '上传中...');
+			hint('backup-hint', '正在上传备份文件...');
+			fetch('/cgi-bin/cgi-upload', { method: 'POST', credentials: 'same-origin', body: fd })
+				.then(function (r) { return r.json(); })
+				.then(function (reply) {
+					if (reply && reply.failure) throw new Error(reply.failure || '上传失败');
+					hint('backup-hint', '上传完成,正在恢复...');
+					return ubus('restore', { path: '/tmp/restore-upload.tar.gz' });
+				})
+				.then(function (res) {
+					if (res && res.ok) hint('backup-hint', ' 配置已从上传的备份恢复,建议重启路由器', 'ok');
+					else hint('backup-hint', ' ' + (res && res.error ? res.error : '恢复失败'), 'err');
+				})
+				.catch(function (e) {
+					hint('backup-hint', ' ' + e.message, 'err');
+				})
+				.finally(function () {
+					setBusy('btn-manual-restore', false, '手动恢复');
+				});
+		});
+	}
+
+	/* ---------------- 配置 ---------------- */
+
+	function fillConfig(settings) {
+		$('cfg-repo').value = settings.repo || '';
+		$('cfg-tag').value = settings.tag || '';
+		$('cfg-pattern').value = settings.firmware_pattern || '';
+		$('cfg-minsize').value = (settings.min_size_mb == null || settings.min_size_mb === '')
+			? '15' : settings.min_size_mb;
+		$('cfg-proxy').value = settings.proxy || '';
+		$('cfg-workers').value = settings.dl_workers || '6';
+		$('cfg-chunk').value = settings.dl_chunk_mb || '4';
+		$('cfg-stall').value = settings.dl_stall_sec || '30';
+		$('cfg-retries').value = settings.dl_retries || '3';
+		// 慢速保护的 0 是有效取值（表示关闭保护或不设宽限期），
+		// 因此不能用 `||` 把它替换成默认值。
+		[['cfg-minspeed', settings.dl_min_speed_kb, '32'],
+		 ['cfg-slowwin', settings.dl_slow_window_sec, '15'],
+		 ['cfg-slowgrace', settings.dl_slow_grace_sec, '10']].forEach(function (f) {
+			if ($(f[0])) {
+				$(f[0]).value = (f[1] == null || f[1] === '') ? f[2] : f[1];
+			}
+		});
+		// 高级项：保留配置 / API 策略 / 缓存 TTL
+		[['cfg-keep-config', settings.keep_config], ['cfg-api-via-proxy', settings.api_via_proxy]]
+			.forEach(function (f) {
+				if ($(f[0]) && f[1] !== undefined && f[1] !== '') $(f[0]).value = String(f[1]);
+			});
+		[['cfg-api-timeout', settings.api_timeout],
+			['cfg-ttl-actions', settings.ttl_actions], ['cfg-ttl-releases', settings.ttl_releases],
+			['cfg-ttl-artifacts', settings.ttl_artifacts], ['cfg-ttl-compat', settings.ttl_compat],
+			['cfg-ttl-network', settings.ttl_network]].forEach(function (f) {
+			if ($(f[0]) && f[1] !== undefined && f[1] !== '') $(f[0]).value = String(f[1]);
+		});
+		// Token 已存在 UCI 中（后端默认从这里读取），回填到输入框，
+		// 否则页面看起来“没配置”，保存时空值还会把已有 Token 清掉。
+		if ($('cfg-token')) $('cfg-token').value = settings.github_token || '';
+		if ($('cfg-expected-sha256')) {
+			$('cfg-expected-sha256').value = settings.expected_sha256 || '';
+		}
+		if (settings.repo) {
+			$('cfg-url').value = (settings.tag === 'latest' || (settings.tag || '').indexOf('latest@') === 0)
+				? ('https://github.com/' + settings.repo)
+				: ('https://github.com/' + settings.repo + '/releases/tag/' + settings.tag);
+		} else {
+			$('cfg-url').value = '';
+		}
+		// v2.6：通用仓库地址与 Actions 筛选（get_config 返回 UCI 全量字段，缺失即留空）
+		[['cfg-repo-url', settings.repo_url], ['cfg-build-branch', settings.build_branch],
+		 ['cfg-workflow-filter', settings.workflow_filter]].forEach(function (f) {
+			if ($(f[0])) $(f[0]).value = f[1] || '';
+		});
+		updateSummary();
+	}
+
+	function parseUrl() {
+		var v = $('cfg-url').value.trim();
+		if (!v) { hint('config-hint', '请先粘贴链接或填写仓库', 'err'); return; }
+		var repo = '', tag = '';
+		var m = v.match(/github\.com\/([^\/\s?#]+)\/([^\/\s?#]+?)(?:\.git)?(?:\/|$)/);
+		if (m) {
+			repo = m[1] + '/' + m[2];
+			var t = v.match(/releases\/tag\/([^\/\s?#]+)/);
+			if (t) {
+				tag = t[1];
+			} else if (v.match(/releases\/?($|[?#])/) || v.match(/releases\/latest/)) {
+				tag = 'latest';
+			}
+		} else if (/^[^\/\s]+\/[^\/\s]+$/.test(v)) {
+			repo = v;
+			tag = 'latest';
+		}
+		if (!repo) { hint('config-hint', ' 无法识别,支持:Release 链接 / 仓库链接 / owner/repo', 'err'); return; }
+		$('cfg-repo').value = repo;
+		$('cfg-tag').value = tag || 'latest';
+		hint('config-hint', ' 已识别:仓库 ' + repo + ',标签 ' + (tag || 'latest') + '(可点「获取固件列表」选择固件文件)', 'ok');
+		updateSummary();
+	}
+
+	function getAssetSizeMB(a) {
+		if (typeof a.size === 'number' && a.size > 0) {
+			return a.size / (1024 * 1024);
+		}
+		if (typeof a.size_human === 'string') {
+			var str = a.size_human.trim();
+			var num = parseFloat(str);
+			if (isNaN(num)) return 0;
+			if (/GB$/i.test(str)) return num * 1024;
+			if (/MB$/i.test(str)) return num;
+			if (/KB$/i.test(str)) return num / 1024;
+			if (/B$/i.test(str)) return num / (1024 * 1024);
+		}
+		return 0;
+	}
+
+	function fetchAssets() {
+		var repo = $('cfg-repo').value.trim();
+		if (!repo) { hint('config-hint', ' 请先在①填写或识别仓库', 'err'); return; }
+		setBusy('btn-fetch-assets', true, '获取中...');
+		ubus('probe_assets', { repo: repo, tag: $('cfg-tag').value.trim() || 'latest' })
+			.then(function (r) {
+				if (!r || !r.ok) throw new Error((r && r.error) || '获取失败');
+				setText('asset-resolved', '最新 Release: ' + r.resolved_tag);
+				var sel = $('cfg-asset');
+				sel.innerHTML = '';
+
+				var minSizeVal = $('cfg-minsize') ? parseInt($('cfg-minsize').value, 10) : 15;
+				var minSizeMB = isNaN(minSizeVal) ? 15 : (minSizeVal < 0 ? 0 : minSizeVal);
+
+				var rawAssets = r.assets || [];
+				var filteredAssets = rawAssets.filter(function (a) {
+					return getAssetSizeMB(a) >= minSizeMB;
+				});
+				var filteredCount = rawAssets.length - filteredAssets.length;
+
+				if (filteredAssets.length === 0) {
+					var o = document.createElement('option');
+					o.value = '';
+					o.disabled = true;
+					o.selected = true;
+					if (rawAssets.length > 0) {
+						o.textContent = '未发现 ≥ ' + minSizeMB + 'MB 固件 (' + rawAssets.length + ' 个文件均被过滤)';
+						hint('config-hint', ' 未发现 ≥ ' + minSizeMB + 'MB 的固件文件 (已过滤 ' + filteredCount + ' 个非固件附件)，可前往高级配置调整最小体积', 'warn');
+					} else {
+						o.textContent = '此 Release 无附件文件';
+						hint('config-hint', ' 该 Release 下未包含任何产物附件', 'warn');
+					}
+					sel.appendChild(o);
+					$('asset-box').style.display = '';
+					return;
+				}
+
+				var recommendedSelected = false;
+				filteredAssets.forEach(function (a) {
+					var o = document.createElement('option');
+					o.value = a.name;
+					var prefix = '';
+					if (a.compat) {
+						if (a.compat.level === 'compatible') {
+							prefix = ' [推荐] ';
+						} else if (a.compat.level === 'warning') {
+							prefix = ' [需核对] ';
+						} else if (a.compat.level === 'incompatible') {
+							prefix = ' [不匹配] ';
+						}
+					}
+					o.textContent = prefix + a.name + ' (' + a.size_human + ')';
+					o.setAttribute('data-level', a.compat ? a.compat.level : '');
+					o.setAttribute('data-reason', a.compat ? a.compat.reason : '');
+					if (!recommendedSelected && a.compat && a.compat.can_upgrade) {
+						o.selected = true;
+						recommendedSelected = true;
+					}
+					sel.appendChild(o);
+				});
+				$('asset-box').style.display = '';
+				onAssetSelected();
+
+				var msg = ' 已获取 ' + filteredAssets.length + ' 个固件文件';
+				if (filteredCount > 0) {
+					msg += ' (已自动过滤 ' + filteredCount + ' 个小于 ' + minSizeMB + 'MB 的非固件小文件)';
+				}
+				msg += '，已自动推荐适配固件，点「使用此文件」可固化规则';
+				hint('config-hint', msg, 'ok');
+			})
+			.catch(function (e) {
+				hint('config-hint', ' ' + e.message, 'err');
+			})
+			.finally(function () {
+				setBusy('btn-fetch-assets', false, '获取固件列表');
+			});
+	}
+
+	function onAssetSelected() {
+		var sel = $('cfg-asset');
+		if (!sel || !sel.options || !sel.options.length) return;
+		var opt = sel.options[sel.selectedIndex];
+		if (!opt) return;
+		var level = opt.getAttribute('data-level');
+		var reason = opt.getAttribute('data-reason');
+		if (level === 'incompatible') {
+			hint('config-hint', ' 警告：' + reason, 'err');
+		} else if (level === 'compatible') {
+			hint('config-hint', ' 兼容评估：' + reason + '，可点「使用此文件」生成匹配规则', 'ok');
+		} else if (level === 'warning') {
+			hint('config-hint', ' 需人工核对：' + reason, 'warn');
+		}
+	}
+
+	function escapeRegex(s) {
+		return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	function generalizeAssetName(name) {
+		var escaped = escapeRegex(name);
+		return escaped.replace(/[0-9]{1,4}(\\\.[0-9]{1,4}){2,}/g, '[0-9][0-9.]*')
+			.replace(/[0-9]{4}(?:-[0-9]{1,2}){2}/g, '[0-9][0-9.-]*');
+	}
+
+	function applyAsset() {
+		var name = $('cfg-asset').value;
+		if (!name) return;
+		$('cfg-pattern').value = '^' + generalizeAssetName(name) + '$';
+		hint('config-hint', ' 已生成版本无关匹配规则(编译日期自动通配;新版固件无需重新生成)', 'ok');
+		updateSummary();
+	}
+
+	function updateSummary() {
+		var repo = $('cfg-repo').value.trim();
+		var tag = $('cfg-tag').value.trim() || 'latest';
+		var pattern = $('cfg-pattern').value.trim();
+		var el = $('config-summary');
+		if (!el) return;
+		if (!repo) { el.textContent = '尚未配置固件源'; return; }
+		var tagText = tag === 'latest' ? '自动追踪最新 Release'
+			: tag.indexOf('latest@') === 0 ? '追踪最新 Release (仅取标签匹配 ' + tag.slice(7) + ' 的)'
+			: '固定标签 ' + tag;
+		el.textContent = '当前: ' + repo + '  ·  ' + tagText +
+			(pattern ? '  ·  固件匹配 ' + pattern : '  ·  未设匹配规则');
+	}
+
+	function saveConfig() {
+		setBusy('btn-save-config', true, '保存中...');
+		var cfg = {
+			repo: $('cfg-repo').value.trim(),
+			tag: $('cfg-tag').value.trim(),
+			pattern: $('cfg-pattern').value.trim(),
+			proxy: $('cfg-proxy').value.trim(),
+			github_token: $('cfg-token').value,
+			expected_sha256: $('cfg-expected-sha256') ? $('cfg-expected-sha256').value.trim() : '',
+			repo_url: $('cfg-repo-url') ? $('cfg-repo-url').value.trim() : '',
+			build_branch: $('cfg-build-branch') ? $('cfg-build-branch').value.trim() : '',
+			workflow_filter: $('cfg-workflow-filter') ? $('cfg-workflow-filter').value.trim() : '',
+			api_via_proxy: $('cfg-api-via-proxy') ? $('cfg-api-via-proxy').value : ''
+		};
+		[['api_timeout', 'cfg-api-timeout'],
+			['ttl_actions', 'cfg-ttl-actions'], ['ttl_releases', 'cfg-ttl-releases'],
+			['ttl_artifacts', 'cfg-ttl-artifacts'], ['ttl_compat', 'cfg-ttl-compat'],
+			['ttl_network', 'cfg-ttl-network']].forEach(function (f) {
+			if ($(f[1]) && $(f[1]).value.trim() !== '') cfg[f[0]] = Number($(f[1]).value);
+		});
+		[['dl_workers', 'cfg-workers'], ['dl_chunk_mb', 'cfg-chunk'],
+		 ['dl_stall_sec', 'cfg-stall'], ['dl_retries', 'cfg-retries'],
+		 ['min_size_mb', 'cfg-minsize'], ['dl_min_speed_kb', 'cfg-minspeed'],
+		 ['dl_slow_window_sec', 'cfg-slowwin'], ['dl_slow_grace_sec', 'cfg-slowgrace']]
+			.forEach(function (f) {
+				if (!$(f[1])) return;
+				var v = parseInt($(f[1]).value, 10);
+				if (!isNaN(v)) cfg[f[0]] = v;
+			});
+		ubus('set_config', cfg).then(function (r) {
+			if (r && r.ok) {
+				hint('config-hint', ' 配置已保存', 'ok');
+				updateSummary();
+			} else {
+				hint('config-hint', ' ' + (r && r.error ? r.error : '保存失败'), 'err');
+			}
+		}).catch(function (e) {
+			hint('config-hint', ' ' + e.message, 'err');
+		}).finally(function () {
+			setBusy('btn-save-config', false, '保存配置');
+		});
+	}
+
+	function renderSysinfo(info) {
+		setText('cur-ver', (info.id || 'OpenWrt') + ' ' + (info.release || '') +
+			(info.revision ? ' (' + info.revision + ')' : ''));
+		var devSub = $('cur-device-sub');
+		if (devSub) {
+			var devParts = [];
+			if (info.model) devParts.push(info.model);
+			if (info.arch || info.uname_arch) devParts.push(info.arch || info.uname_arch);
+			if (info.target) devParts.push(info.target);
+			devSub.textContent = devParts.length ? ('本机: ' + devParts.join(' · ')) : '本机系统固件环境';
+		}
+	}
+
+	/* ---------------- 日志 ---------------- */
+
+	var LOG_VIEW_MAX = 1200;
+
+	// 日志级别：只根据文本判定，不依赖后端格式，旧日志也能正确着色。
+	function logLevelOf(text) {
+		if (/失败|错误|异常|ERROR|FAIL|FATAL|超时/i.test(text)) return 'error';
+		if (/警告|WARN|注意|风险/i.test(text)) return 'warn';
+		if (/成功|完成|已就绪|OK\b|✓/i.test(text)) return 'ok';
+		return 'info';
+	}
+
+	// 结构化渲染运行日志：
+	//   - [tag] 前缀变成色块，正文单独成列，长行可读换行
+	//   - 纯 JSON 行（states 等）默认折叠，只显示 model/state/ok/时间摘要
+	//   - 连续重复行合并为 ×N，避免反复检测刷屏
+	//   - 超过 1200 行只渲染最近部分，顶部给出统计
+	function renderLog(text) {
+		var lv = $('log-view');
+		if (!lv) return;
+		var all = String(text == null ? '' : text).split('\n');
+		var total = all.length;
+		var truncated = false;
+		if (total > LOG_VIEW_MAX) {
+			all = all.slice(total - LOG_VIEW_MAX);
+			truncated = true;
+		}
+
+		var rows = [];
+		var errors = 0, warns = 0, jsonFolded = 0, prev = null, same = 0;
+
+		function markRepeat() {
+			if (same > 1 && rows.length)
+				rows[rows.length - 1] += '<span class="ou-log-repeat">×' + same + '</span>';
+		}
+
+		for (var i = 0; i < all.length; i++) {
+			var line = all[i];
+			if (!line.trim()) continue;
+			if (line === prev) { same++; continue; }
+			markRepeat();
+			prev = line;
+			same = 1;
+
+			var t = line.trim();
+			// 只有真能解析成对象/数组的长行才当 JSON 折叠；
+			// 否则 `[check] ...` 这类行会被误判（它们也以 [ 开头）。
+			var folded = null;
+			if ((t.charAt(0) === '{' || t.charAt(0) === '[') && t.length > 40) {
+				try {
+					var parsed = JSON.parse(t);
+					if (parsed && typeof parsed === 'object') folded = parsed;
+				} catch (e2) { folded = null; }
+			}
+			if (folded) {
+				var o = folded;
+				var summary = '';
+				if (!Array.isArray(o)) {
+					var bits = [];
+					if (o.model) bits.push('model=' + o.model);
+					if (o.state) bits.push('state=' + o.state);
+					if (o.ok !== undefined) bits.push('ok=' + o.ok);
+					if (o.generated_at_local) bits.push(o.generated_at_local);
+					summary = bits.join(' · ');
+				}
+				jsonFolded++;
+				rows.push('<details class="ou-log-json"><summary><span class="ou-log-tag json">JSON</span>' +
+					esc(summary || '结构化输出') + ' · ' + esc(fmtSize(t.length)) + '（点开查看）</summary>' +
+					'<pre class="ou-log-json-body">' + esc(t) + '</pre></details>');
+				continue;
+			}
+
+			var m = /^\[([A-Za-z0-9_.\-]+)\]\s?(.*)$/.exec(line);
+			var tag = m ? m[1] : '';
+			var body = m ? m[2] : line;
+			var lvl = logLevelOf(body);
+			if (lvl === 'error') errors++;
+			else if (lvl === 'warn') warns++;
+			rows.push('<div class="ou-log-line" data-level="' + lvl + '">' +
+				'<span class="ou-log-tag' + (tag ? '' : ' plain') + '">' + esc(tag || '·') + '</span>' +
+				'<span class="ou-log-text">' + esc(body) + '</span></div>');
+		}
+		markRepeat();
+
+		var head = '<div class="ou-log-summary"><strong>共 ' + total + ' 行</strong>' +
+			(truncated ? ' · 仅渲染最近 ' + LOG_VIEW_MAX + ' 行' : '') +
+			(errors ? ' · <span class="ou-log-err">错误 ' + errors + '</span>' : '') +
+			(warns ? ' · <span class="ou-log-warn">警告 ' + warns + '</span>' : '') +
+			(jsonFolded ? ' · 折叠 JSON ' + jsonFolded + ' 段' : '') + '</div>';
+
+		lv.innerHTML = head +
+			(rows.length ? rows.join('') : '<div class="ou-log-empty">暂无日志</div>');
+		lv.scrollTop = lv.scrollHeight;
+	}
+
+	function refreshLog() {
+		setBusy('btn-refresh-log', true);
+		ubus('get_log').then(function (r) {
+			renderLog((r && r.log) ? r.log : '');
+		}).catch(function (e) {
+			renderLog('日志读取失败: ' + e.message);
+		}).finally(function () {
+			setBusy('btn-refresh-log', false);
+		});
+	}
+
+	function clearLog() {
+		ouConfirm({
+			tone: 'warning',
+			eyebrow: '运行日志',
+			title: '清空当前日志',
+			message: '日志文件内容会被立即清空，且无法恢复。',
+			confirmText: '清空日志'
+		}).then(function (ok) {
+			if (!ok) return;
+			setBusy('btn-clear-log', true, '清空中...');
+			ubus('clear_log').then(function (r) {
+				if (r && r.ok) {
+					renderLog('');
+				}
+			}).catch(function (e) {
+				ouAlert({
+					tone: 'danger',
+					eyebrow: '运行日志',
+					title: '清空日志失败',
+					message: e.message
+				});
+			}).finally(function () {
+				setBusy('btn-clear-log', false, '清空日志');
+			});
+		});
+	}
+
+	/* ---------------- 插件自身版本与更新 ---------------- */
+
+	var pluginStatusTimer = null;
+	var pluginBaseline = { pid: null, ts: 0 };
+	var pluginFresh = false;
+	var pluginTicks = 0;
+	var lastPluginCheck = null;
+
+	function pluginBadge(text, cls) {
+		var b = $('plugin-badge');
+		if (!b) return;
+		b.className = 'ou-status-pill ' + cls;
+		b.innerHTML = '<span class="ou-dot ' + cls + '"></span> ' + esc(text);
+	}
+
+	function pluginHint(text, cls) {
+		var el = $('plugin-hint');
+		if (!el) return;
+		el.textContent = text || '';
+		el.className = 'ou-plugin-hint' + (cls ? ' ' + cls : '');
+	}
+
+	function setPluginProgress(pct, show) {
+		var wrap = $('plugin-progress');
+		if (wrap) wrap.style.display = show ? '' : 'none';
+		var bar = $('plugin-progress-bar');
+		if (bar) bar.style.width = Math.max(0, Math.min(100, Number(pct) || 0)) + '%';
+		var txt = $('plugin-progress-pct');
+		if (txt) txt.textContent = Math.max(0, Math.min(100, Number(pct) || 0)) + '%';
+	}
+
+	function pluginVersionText(v) {
+		if (!v) return '未知';
+		v = String(v);
+		return v.charAt(0) === 'v' ? v : 'v' + v;
+	}
+
+	// 当前页面模板写入的静态资源版本戳（style.css?v=）。
+	// 自更新安装后新的版本文件会变化，可据此判断页面是否仍在用旧资源。
+	function assetVersion() {
+		var link = document.querySelector('link[href*="online-upgrade/style.css?v="]') ||
+			document.querySelector('script[src*="online-upgrade/app.js?v="]');
+		var url = link ? (link.href || link.src || '') : '';
+		var m = url.match(/[?&]v=([^&]+)/);
+		return m ? decodeURIComponent(m[1]) : '';
+	}
+
+	function refreshPluginAfterUpdate(result, ts) {
+		var r = result || {};
+		setPluginProgress(100, true);
+		pluginBadge('已更新', 'ok');
+		pluginHint(r.message || '插件已更新完成，刷新页面即可加载新界面；无需重启路由器', 'ok');
+		setText('plugin-current', pluginVersionText(r.installed_version || r.to || ''));
+		setText('plugin-latest', r.to ? 'v' + r.to : '—');
+		setText('plugin-checked', fmtTime(ts));
+		showBtn('btn-plugin-update', false);
+		showBtn('btn-plugin-reload', true);
+		lastPluginCheck = null;
+
+		// 重新读取安装后的本地版本；同时对比模板资源版本与后端版本戳。
+		// 若不一致，明确提示刷新页面，避免仍显示更新前的旧界面状态。
+		ubus('plugin_info').then(function (info) {
+			if (info && info.local) {
+				setText('plugin-current', pluginVersionText(info.local.display));
+			}
+			if (info) {
+				setText('plugin-env', (info.manager || '未检测到包管理器') + ' · ' +
+					(info.pkg_arch || info.arch || '未知架构'));
+			}
+			var pageVer = assetVersion();
+			var installedVer = info && info.cache_version;
+			if (pageVer && installedVer && pageVer !== installedVer) {
+				pluginHint('插件已更新到 ' + pluginVersionText(installedVer || r.to) +
+					'；当前页面资源仍是 v' + pageVer +
+					'，请刷新页面后新界面才会生效。', 'warn');
+			}
+		}).catch(function () { /* 版本读取失败不影响“已更新”终态 */ });
+
+		refreshTasks();
+	}
+
+	function stopPluginPoll() {
+		if (pluginStatusTimer) {
+			clearInterval(pluginStatusTimer);
+			pluginStatusTimer = null;
+		}
+	}
+
+	function snapshotPluginStatus() {
+		return ubus('get_plugin_status').then(function (st) {
+			pluginBaseline = {
+				pid: (st && st.pid != null) ? st.pid : null,
+				ts: Number((st && st.ts) || 0)
+			};
+		}).catch(function () {
+			pluginBaseline = { pid: null, ts: 0 };
+		});
+	}
+
+	function pluginIsFresh(st) {
+		if (!st) return false;
+		if (st.pid != null && pluginBaseline.pid != null)
+			return st.pid !== pluginBaseline.pid;
+		return Number(st.ts || 0) > pluginBaseline.ts;
+	}
+
+	function renderPluginInfo(info) {
+		if (!info || info.ok === false) {
+			pluginBadge('读取失败', 'err');
+			pluginHint('插件信息读取失败，请刷新页面重试', 'err');
+			return;
+		}
+		var local = info.local || {};
+		var cur = $('plugin-current');
+		if (cur) {
+			cur.textContent = pluginVersionText(local.display || '未知');
+			cur.title = (local.source_text || local.source || '') +
+				(local.pkg_release ? '（发布号 r' + local.pkg_release + '）' : '');
+		}
+		setText('plugin-env', (info.manager || '未检测到包管理器') + ' · ' +
+			(info.pkg_arch || info.arch || '未知架构'));
+		var asset = $('plugin-asset');
+		if (asset && !lastPluginCheck) {
+			asset.innerHTML = '更新源：<span class="ou-fact-strong">' + esc(info.repo || '') + '</span><br>' +
+				'<span class="ou-plugin-asset-sub">固定读取稳定 Release，按 ' + esc(info.manager || '包管理器') +
+				' 与本机 ' + esc(info.pkg_arch || '架构') + ' 选择安装包。</span>';
+		}
+		if (!info.supported) {
+			pluginBadge('环境不支持', 'err');
+			pluginHint(info.reason || '当前环境无法自动更新插件', 'err');
+			return;
+		}
+	}
+
+	function loadPluginInfo() {
+		return ubus('plugin_info').then(renderPluginInfo).catch(function (e) {
+			pluginBadge('读取失败', 'err');
+			pluginHint('插件信息读取失败: ' + e.message, 'err');
+		});
+	}
+
+	function renderPluginCheckResult(res) {
+		lastPluginCheck = res;
+		if (!res) return;
+		var latest = res.latest || {};
+		if (res.local && res.local.display) {
+			setText('plugin-current', pluginVersionText(res.local.display));
+		}
+		setText('plugin-latest', latest.version ? 'v' + latest.version : '—');
+		setText('plugin-checked', fmtTime(res.checked_ts));
+
+		var assetEl = $('plugin-asset');
+		if (assetEl) {
+			if (res.update_available && res.asset) {
+				var a = res.asset;
+				assetEl.innerHTML =
+					'<span class="ou-fact-strong">' + esc(a.name || '安装包') + '</span><br>' +
+					'<span class="ou-plugin-asset-sub">' + esc(a.size_human || '') +
+					' · ' + esc(a.arch || '') + ' · SHA256 ' + esc((a.sha256 || '').substring(0, 16)) +
+					'…</span>';
+			} else if (res.latest) {
+				assetEl.innerHTML = '<span class="ou-fact-strong">' + esc(latest.tag || '') + '</span><br>' +
+					'<span class="ou-plugin-asset-sub">' + esc(latest.published_at || '—') +
+					' · 无可用更新安装包</span>';
+			}
+		}
+
+		if (res.ok !== true) {
+			pluginBadge('检查失败', 'err');
+			pluginHint(res.reason || '插件检查失败', 'err');
+			showBtn('btn-plugin-update', false);
+			return;
+		}
+
+		if (res.update_available) {
+			pluginBadge('发现新版本', 'update');
+			pluginHint(res.reason || ('可更新到 v' + latest.version), 'warn');
+			showBtn('btn-plugin-update', true);
+			setBusy('btn-plugin-update', false, '更新插件');
+		} else {
+			pluginBadge('已是最新', 'ok');
+			pluginHint(res.reason || '当前已是最新稳定版', 'ok');
+			showBtn('btn-plugin-update', false);
+		}
+		setBusy('btn-plugin-check', false, '检查插件更新');
+	}
+
+	function renderPluginStatus(st) {
+		if (!st || st.state === 'idle') return false;
+		var state = st.state;
+		var active = state === 'checking' || state === 'updating' ||
+			state === 'downloading' || state === 'verifying' || state === 'installing';
+
+		if (active) {
+			setPluginProgress(st.pct || 0, true);
+			var label = state === 'checking' ? '检查中' :
+				state === 'downloading' ? '下载中' :
+				state === 'verifying' ? '校验中' :
+				state === 'installing' ? '安装中' : '更新中';
+			pluginBadge(label, 'update');
+			var note = st.msg || label;
+			// 软件包管理器可能卡在数据库锁或等待仓库索引。进程没退出时
+			// 后端无法判定失败，这里按时间给出可操作的排查提示。
+			var age = Math.floor(Date.now() / 1000) - (st.ts || 0);
+			if (state === 'installing' && age > 300) {
+				note += '（已持续 ' + Math.floor(age / 60) + ' 分钟，可能卡在软件包锁；' +
+					'可查看 /tmp/online-upgrade.log，或 SSH 执行 ps | grep apk 排查）';
+			}
+			pluginHint(note, '');
+			setBusy('btn-plugin-check', true, '检查插件更新');
+			setBusy('btn-plugin-update', true, '更新插件');
+			showBtn('btn-plugin-update', false);
+			showBtn('btn-plugin-reload', false);
+			return true;
+		}
+
+		setBusy('btn-plugin-check', false, '检查插件更新');
+		setBusy('btn-plugin-update', false, '更新插件');
+
+		if (state === 'checked') {
+			setPluginProgress(100, false);
+			renderPluginCheckResult(st.result);
+			return false;
+		}
+		if (state === 'check_failed') {
+			setPluginProgress(100, false);
+			pluginBadge('检查失败', 'err');
+			pluginHint(st.error || st.msg || '插件检查失败', 'err');
+			showBtn('btn-plugin-update', false);
+			return false;
+		}
+		if (state === 'done') {
+			refreshPluginAfterUpdate(st.result, st.ts);
+			return false;
+		}
+		if (state === 'failed') {
+			setPluginProgress(st.pct || 0, true);
+			pluginBadge(st.interrupted ? '更新已中断' : '更新失败', 'err');
+			pluginHint(st.error || st.msg || '插件更新失败', 'err');
+			if (lastPluginCheck && lastPluginCheck.update_available) {
+				showBtn('btn-plugin-update', true);
+			} else {
+				showBtn('btn-plugin-update', false);
+				// 中断后本地检查结果可能已过期，引导重新检查一次。
+				if (st.interrupted) showBtn('btn-plugin-check', true);
+			}
+			refreshTasks();
+			return false;
+		}
+		return false;
+	}
+
+	function startPluginPoll() {
+		stopPluginPoll();
+		pluginTicks = 0;
+		pluginStatusTimer = setInterval(function () {
+			pluginTicks++;
+			if (pluginTicks > 90) {
+				stopPluginPoll();
+				pluginBadge('状态未知', 'err');
+				pluginHint('未读取到本次插件任务的状态，请查看运行日志后重试', 'err');
+				setBusy('btn-plugin-check', false, '检查插件更新');
+				return;
+			}
+			ubus('get_plugin_status').then(function (st) {
+				if (pluginFresh) {
+					if (!pluginIsFresh(st)) return;
+					pluginFresh = false;
+				}
+				if (!renderPluginStatus(st)) stopPluginPoll();
+			}).catch(function () { /* 路由重启或瞬时 RPC 错误：继续轮询 */ });
+		}, 1000);
+	}
+
+	function runPluginCheck() {
+		setBusy('btn-plugin-check', true, '检查中...');
+		setBusy('btn-plugin-update', true, '更新插件');
+		showBtn('btn-plugin-update', false);
+		showBtn('btn-plugin-reload', false);
+		setPluginProgress(0, false);
+		pluginBadge('检查中', 'update');
+		pluginHint('正在获取插件 Release 信息...', '');
+		stopPluginPoll();
+		snapshotPluginStatus().then(function () {
+			pluginFresh = true;
+			return ubus('start_plugin_check');
+		}).then(function (r) {
+			if (r && r.ok === false) {
+				pluginFresh = false;
+				pluginBadge('检查失败', 'err');
+				pluginHint(r.error || '插件检查未能启动', 'err');
+				setBusy('btn-plugin-check', false, '检查插件更新');
+				return;
+			}
+			startPluginPoll();
+		}).catch(function (e) {
+			pluginFresh = false;
+			pluginBadge('检查失败', 'err');
+			pluginHint('插件检查请求失败: ' + e.message, 'err');
+			setBusy('btn-plugin-check', false, '检查插件更新');
+		});
+	}
+
+	function runPluginUpdate() {
+		var r = lastPluginCheck;
+		if (!r || !r.update_available || !r.asset) return;
+		var from = r.local ? r.local.display : '未知';
+		var to = r.latest ? r.latest.version : '未知';
+		ouConfirm({
+			tone: 'primary',
+			eyebrow: '插件更新',
+			title: '更新插件到 v' + to,
+			message: '当前版本：' + from + '\n更新只替换插件本身，不会重启路由器；完成后刷新页面即可。',
+			detail: r.asset.name + '\nSHA256: ' + (r.asset.sha256 || '').substring(0, 16) + '...',
+			confirmText: '开始更新'
+		}).then(function (ok) {
+			if (!ok) return;
+			setBusy('btn-plugin-check', true, '检查插件更新');
+			setBusy('btn-plugin-update', true, '启动中...');
+			showBtn('btn-plugin-update', false);
+			showBtn('btn-plugin-reload', false);
+			setPluginProgress(0, true);
+			pluginBadge('更新中', 'update');
+			pluginHint('正在校验最新版本并准备下载...', '');
+			stopPluginPoll();
+			refreshTasks();
+			snapshotPluginStatus().then(function () {
+				pluginFresh = true;
+				return ubus('start_plugin_update');
+			}).then(function (res) {
+				if (res && res.ok === false) {
+					pluginFresh = false;
+					pluginBadge('更新失败', 'err');
+					pluginHint(res.error || '插件更新未能启动', 'err');
+					setBusy('btn-plugin-check', false, '检查插件更新');
+					setBusy('btn-plugin-update', false, '更新插件');
+					showBtn('btn-plugin-update', true);
+					return;
+				}
+				startPluginPoll();
+			}).catch(function (e) {
+				pluginFresh = false;
+				pluginBadge('更新失败', 'err');
+				pluginHint('插件更新请求失败: ' + e.message, 'err');
+				setBusy('btn-plugin-check', false, '检查插件更新');
+				setBusy('btn-plugin-update', false, '更新插件');
+				showBtn('btn-plugin-update', true);
+			});
+		});
+	}
+
+	/* ---------------- 四套独立状态模型 / 统一诊断层 (v2.6) ----------------
+	 * 只读渲染：get_states 只读取 /tmp 下的独立缓存文件，不消耗 GitHub 额度。
+	 * 刷新走 refresh_states（detached），再有限次读取缓存，避免高频轮询。
+	 * 所有状态同时用「文字 + data-state」表达，不依赖颜色单独区分。 */
+
+	var statesBusy = false;      // 请求去重：同一时刻只允许一个 get_states 在途
+	var statesRefreshing = false;
+	var statesBaseline = 0;
+
+	function stSetHtml(id, html) {
+		var el = $(id);
+		if (el) el.innerHTML = html;
+	}
+
+	function stRow(label, value, extraCls) {
+		if (value === undefined || value === null || value === '' || value === 'unknown') return '';
+		return '<div class="ou-st-row' + (extraCls ? ' ' + extraCls : '') + '">' +
+			'<span class="ou-st-key">' + esc(label) + '</span>' +
+			'<span class="ou-st-val">' + esc(value) + '</span></div>';
+	}
+
+	function stBadge(id, state, label) {
+		var el = $(id);
+		if (!el) return;
+		el.setAttribute('data-state', String(state || 'unknown'));
+		el.textContent = label || '未知';
+	}
+
+	function stList(arr, fmt, limit) {
+		if (!Array.isArray(arr) || !arr.length) return '';
+		var out = '', n = Math.min(arr.length, limit || 5);
+		for (var i = 0; i < n; i++) out += fmt(arr[i]);
+		if (arr.length > n) out += '<p class="ou-st-more">还有 ' + (arr.length - n) + ' 项…</p>';
+		return out;
+	}
+
+	function stApiNote(api) {
+		if (!api) return '';
+		var bits = [];
+		if (api.status === 'rate_limited') bits.push('API 限流');
+		else if (api.status === 'error') bits.push('查询失败');
+		else if (api.status === 'cached') bits.push('缓存命中');
+		else if (api.status === 'ok') bits.push('实时数据');
+		else bits.push('未查询');
+		if (api.stale) bits.push('数据已过期，非实时');
+		if (api.last_success_local) bits.push('上次成功 ' + api.last_success_local);
+		if (api.error) bits.push(api.error);
+		return '<p class="ou-st-api" data-status="' + esc(api.status || '') + '">' +
+			esc(bits.join(' · ')) + '</p>';
+	}
+
+	function renderActions(a) {
+		if (!a) return;
+		stBadge('st-actions-state', a.state, a.state_label);
+		var h = '<p class="ou-st-lead">' + esc(a.detail || '') + '</p>';
+		var lb = a.latest_build;
+		if (lb && lb.workflow_name) {
+			h += '<div class="ou-st-kv">' +
+				stRow('Workflow', lb.workflow_name) +
+				stRow('状态', lb.state_label) +
+				stRow('分支', lb.branch) +
+				stRow('Commit', lb.sha ? String(lb.sha).substring(0, 10) : '') +
+				stRow('触发方式', lb.event) +
+				stRow('开始时间', lb.started_at_local || lb.created_at_local) +
+				stRow('完成时间', lb.completed_at_local) +
+				(lb.html_url ? '<div class="ou-st-row"><a class="ou-file-text" href="' + esc(lb.html_url) +
+					'" target="_blank" rel="noopener">在 GitHub 查看本次运行 ↗</a></div>' : '') +
+				'</div>';
+		}
+		if (a.runs && a.runs.length > 1) {
+			h += '<details class="ou-st-details"><summary>全部运行记录 (' + a.runs.length + ')</summary>' +
+				stList(a.runs, function (r) {
+					return '<div class="ou-st-mini"><span class="ou-file-text">' + esc(r.workflow_name) +
+						'</span><span class="ou-st-mini-state" data-state="' + esc(r.state) + '">' +
+						esc(r.state_label) + '</span><span>' + esc(r.branch) + '</span></div>';
+				}, 10) + '</details>';
+		}
+		if (a.workflow_count) h += '<p class="ou-st-foot">自动发现 ' + a.workflow_count + ' 个 Workflow，' +
+			a.run_count + ' 条运行记录' +
+			(a.workflow_filter ? '（已按 ' + esc(a.workflow_filter) + ' 筛选）' : '') + '</p>';
+		h += stApiNote(a.api);
+		stSetHtml('st-actions-body', h);
+	}
+
+	function renderReleases(r) {
+		if (!r) return;
+		stBadge('st-releases-state', r.state, r.state_label);
+		var h = '<p class="ou-st-lead">' + esc(r.detail || '') + '</p>';
+		if (r.latest && r.latest.tag_name) {
+			h += '<div class="ou-st-kv">' +
+				stRow('Release', r.latest.name || r.latest.tag_name) +
+				stRow('Tag', r.latest.tag_name) +
+				stRow('发布时间', r.latest.published_at_local) +
+				stRow('预发布', r.latest.prerelease ? '是' : '否') +
+				stRow('资产数', r.latest.asset_count) +
+				(r.latest.html_url ? '<div class="ou-st-row"><a class="ou-file-text" href="' +
+					esc(r.latest.html_url) + '" target="_blank" rel="noopener">查看 Release ↗</a></div>' : '') +
+				'</div>';
+		}
+		if (r.releases && r.releases.length > 1) {
+			h += '<details class="ou-st-details"><summary>全部 Release (' + r.releases.length + ')</summary>' +
+				stList(r.releases, function (rel) {
+					return '<div class="ou-st-mini"><span class="ou-file-text">' + esc(rel.tag_name) +
+						'</span><span>' + esc(rel.published_at_local || '') + '</span><span>' +
+						(rel.prerelease ? '预发布' : '正式') + '</span></div>';
+				}, 10) + '</details>';
+		}
+		h += '<p class="ou-st-foot">资产合计 ' + (r.total_assets || 0) +
+			' 个，其中识别为固件候选 ' + (r.total_firmware_candidates || 0) + ' 个</p>';
+		h += stApiNote(r.api);
+		stSetHtml('st-releases-body', h);
+	}
+
+	function renderArtifacts(t) {
+		if (!t) return;
+		stBadge('st-artifacts-state', t.state, t.state_label);
+		var h = '<p class="ou-st-lead">' + esc(t.detail || '') + '</p>';
+		if (t.artifacts && t.artifacts.length) {
+			h += stList(t.artifacts, function (a) {
+				return '<div class="ou-st-art"><span class="ou-file-text">' + esc(a.name) + '</span>' +
+					'<span>' + esc(a.size_human) + '</span>' +
+					'<span>' + (a.expired ? '已过期' : '未过期') + '</span>' +
+					'<span>' + (a.downloadable ? '可下载' : '匿名不可下载') + '</span>' +
+					'<span class="ou-st-art-time">' + esc(a.expires_at_local || '') + '</span></div>';
+			}, 6);
+			h += '<p class="ou-st-foot">未过期 ' + (t.usable_count || 0) + ' 个 / 已过期 ' +
+				(t.expired_count || 0) + ' 个 / 可下载 ' + (t.downloadable_count || 0) + ' 个</p>';
+		}
+		h += '<p class="ou-st-note">Artifact 会过期，且内部文件必须下载后安全解析，名称不足以判定固件。</p>';
+		h += stApiNote(t.api);
+		stSetHtml('st-artifacts-body', h);
+	}
+
+	function renderCompat(c) {
+		if (!c) return;
+		stBadge('st-compat-state', c.state, c.state_label);
+		var h = '<p class="ou-st-lead">' + esc(c.detail || '') + '</p>';
+		if (c.checks && c.checks.length) {
+			h += stList(c.checks, function (chk) {
+				var layers = '';
+				if (chk.layers && chk.layers.length) {
+					layers = '<div class="ou-st-layers">' + chk.layers.map(function (l) {
+						return '<span class="ou-st-layer" data-passed="' + (l.passed ? '1' : '0') + '">' +
+							'L' + l.layer + ' ' + esc(l.name) + (l.passed ? ' ✓' : ' · 待验证') + '</span>';
+					}).join('') + '</div>';
+				}
+				return '<div class="ou-st-fw"><span class="ou-file-text">' + esc(chk.name) + '</span>' +
+					'<span class="ou-st-fw-state" data-state="' + esc(chk.state) + '">' +
+					esc(chk.state_label) + '</span><span>' + esc(chk.match_level_label) + '</span>' +
+					'<p class="ou-st-fw-reason">' + esc(chk.reason) + '</p>' + layers + '</div>';
+			}, 4);
+		}
+		h += '<p class="ou-st-foot">' + (c.can_upgrade ? '允许进入刷写流程' : '暂不允许自动刷写') +
+			' · 本机 ' + (c.supports_sysupgrade_test ? '支持' : '不支持') + ' sysupgrade -T 预检</p>';
+		h += stApiNote(c.api);
+		stSetHtml('st-compat-body', h);
+	}
+
+	function renderDeviceInfo(d) {
+		if (!d) return;
+		stBadge('st-device-state', d.complete ? 'ok' : 'warning', d.complete ? '信息完整' : '部分未知');
+		var compat = Array.isArray(d.compatible) ? d.compatible.join(', ') : d.compatible;
+		var methods = Array.isArray(d.upgrade_methods) ? d.upgrade_methods.join(', ') : d.upgrade_methods;
+		var h = '<div class="ou-st-kv ou-st-kv-device">' +
+			stRow('设备型号', d.model) + stRow('board_name', d.board_name) +
+			stRow('Device Tree Compatible', compat) +
+			stRow('Target', d.target) + stRow('Subtarget', d.subtarget) +
+			stRow('CPU 架构', d.cpu_arch) + stRow('Package Arch', d.pkg_arch) +
+			stRow('ABI', d.abi) + stRow('发行版', d.distro) +
+			stRow('固件版本', d.firmware_version) + stRow('内核版本', d.kernel_version) +
+			stRow('系统标识', d.system_id) + stRow('固件平台', d.platform) +
+			stRow('支持的升级方式', methods) + '</div>';
+		if (d.unknown_fields && d.unknown_fields.length)
+			h += '<p class="ou-st-note">以下字段未能识别，已保留未知（未推测）：' +
+				esc(d.unknown_fields.join('、')) + '</p>';
+		stSetHtml('st-device-body', h);
+	}
+
+	function renderNetwork(net, policy) {
+		var state = 'not_checked', label = '未检测';
+		var h = '';
+		if (net) {
+			state = net.class || 'unknown';
+			label = net.label || '未知';
+			h = '<div class="ou-st-kv">' +
+				stRow('检测结果', net.label) + stRow('说明', net.detail) +
+				stRow('HTTP 状态', net.http_status ? String(net.http_status) : '') +
+				stRow('耗时', net.latency_ms ? net.latency_ms + ' ms' : '') +
+				stRow('上次成功', net.last_success_local) +
+				(net.stale ? stRow('数据状态', '缓存/已过期，非实时') : '') + '</div>';
+		} else {
+			h = '<p class="ou-st-empty">尚未执行网络连通性检测（真实 HTTP 请求，非 Ping）</p>';
+		}
+		if (policy) {
+			h += '<p class="ou-st-foot">线路策略：' +
+				(policy.api_via_proxy ? 'API 可经加速源' : 'API 默认直连 api.github.com') +
+				' · 下载加速源优先、失败回退官方 · TLS 校验' +
+				(policy.tls_verification_disabled ? '已关闭（异常）' : '开启') +
+				' · 并发上限 ' + policy.max_concurrency + '</p>';
+		}
+		stBadge('st-network-state', state, label);
+		stSetHtml('st-network-body', h);
+	}
+
+	function renderDiagnostics(diag) {
+		if (!diag) return;
+		var sev = diag.severity || 'unknown';
+		var box = $('st-diag');
+		if (box) box.setAttribute('data-severity', sev);
+		setText('st-diag-severity', diag.severity_label || '未知');
+		setText('st-diag-summary', diag.summary || '暂无诊断结论');
+		var h = '';
+		if (diag.blocking_reasons && diag.blocking_reasons.length) {
+			h += '<div class="ou-st-diag-block"><strong>无法升级的原因</strong><ul>' +
+				diag.blocking_reasons.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') +
+				'</ul></div>';
+		} else {
+			h += '<div class="ou-st-diag-ok"><span class="ou-st-diag-ok-dot"></span>' +
+				'当前没有阻断升级的因素；仍需下载后完成完整性与本机预检</div>';
+		}
+		if (diag.next_actions && diag.next_actions.length) {
+			h += '<div class="ou-st-diag-next"><strong>建议下一步</strong><ol>' +
+				diag.next_actions.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') +
+				'</ol></div>';
+		}
+		if (diag.sections && diag.sections.length) {
+			// blocking / next 已在上面单独成段，明细里不再重复
+			var secs = diag.sections.filter(function (s) {
+				return s.key !== 'blocking' && s.key !== 'next';
+			});
+			if (secs.length) {
+				h += '<details class="ou-st-details" id="st-diag-sections"><summary>完整诊断明细（' +
+					secs.length + ' 项）</summary><div class="ou-st-diag-grid">';
+				for (var i = 0; i < secs.length; i++) {
+					var s = secs[i];
+					var ev = '';
+					if (s.evidence && s.evidence.length) {
+						ev = '<ul class="ou-st-diag-ev">' + s.evidence.slice(0, 3).map(function (e) {
+							return '<li>' + esc(e) + '</li>';
+						}).join('') + '</ul>';
+					}
+					h += '<div class="ou-st-diag-sec" data-severity="' + esc(s.severity) + '">' +
+						'<div class="ou-st-diag-sec-title"><span class="ou-st-diag-sec-sev">' +
+						esc(s.severity_label) + '</span>' + esc(s.title) + '</div>' +
+						'<p>' + esc(s.text) + '</p>' + ev + '</div>';
+				}
+				h += '</div></details>';
+			}
+		}
+		stSetHtml('st-diag-body', h);
+	}
+
+	function renderStates(st) {
+		if (!st || st.ok === false) {
+			hint('states-hint', (st && st.error) ? ('读取状态失败: ' + st.error +
+				(st.hint ? '。' + st.hint : '')) : '读取状态失败', 'err');
+			return;
+		}
+		statesBaseline = Number(st.generated_at) || 0;
+		renderDiagnostics(st.diagnostics);
+		renderActions(st.actions);
+		renderReleases(st.releases);
+		renderArtifacts(st.artifacts);
+		renderCompat(st.compat);
+		renderDeviceInfo(st.device);
+		renderNetwork(st.network, st.policy);
+
+		var fresh = (st.model_freshness || st.diagnostics && st.diagnostics.model_freshness) || [];
+		var staleCount = 0;
+		for (var i = 0; i < fresh.length; i++) if (fresh[i].stale) staleCount++;
+		var pill = $('st-freshness-pill');
+		if (pill) {
+			pill.setAttribute('data-state', staleCount ? 'warning' : 'ok');
+			pill.innerHTML = '<span class="ou-dot ' + (staleCount ? '' : 'ok') + '"></span> ' +
+				(staleCount ? (staleCount + ' 套缓存数据') : '状态已同步');
+		}
+		// hint() 用 textContent 写入，不能再 esc()，否则会显示 &amp; 等实体
+		hint('states-hint', '仓库 ' + (st.repo || '未配置') + ' · ' +
+			(st.generated_at_local || '') + ' · 四套状态独立缓存，API 故障不覆盖真实状态', '');
+	}
+
+	// get_states 被 rpcd 拒绝（升级后 rpcd 未重载 / 会话 ACL 快照过期）时，
+	// 四套面板保持「尚未查询」会让用户误以为功能没做；这里改为明确的
+	// 文字化失败状态 + 可操作指引，不用颜色单独表达。
+	function renderStatesFailure(msg) {
+		var note = '<p class="ou-st-empty">' + esc(msg) + '</p>';
+		var ids = ['actions', 'releases', 'artifacts', 'compat', 'device', 'network'];
+		for (var i = 0; i < ids.length; i++) {
+			stBadge('st-' + ids[i] + '-state', 'error', '无法读取');
+			stSetHtml('st-' + ids[i] + '-body', note);
+		}
+		stBadge('st-diag-severity', 'error', '异常');
+		stSetHtml('st-diag-summary', '远程状态未加载');
+		stSetHtml('st-diag-body', note);
+		var pill = $('st-freshness-pill');
+		if (pill) pill.setAttribute('data-state', 'error');
+	}
+
+	// 请求去重：同一时刻只允许一个 get_states 在途，避免轮询叠加浪费请求。
+	function loadStates() {
+		if (statesBusy) return Promise.resolve(null);
+		statesBusy = true;
+		return ubus('get_states').then(function (st) {
+			renderStates(st);
+			return st;
+		}).catch(function (e) {
+			hint('states-hint', '读取状态失败: ' + e.message, 'err');
+			renderStatesFailure(e.message);
+			return null;
+		}).then(function (st) {
+			statesBusy = false;
+			return st;
+		});
+	}
+
+	// 刷新：detached 提交后有限次读取缓存（最多 4 次，约 8 秒），
+	// 不做无限轮询；用户可随时点「读取缓存」手动刷新。
+	function refreshStates(force) {
+		if (statesRefreshing) return;
+		statesRefreshing = true;
+		setBusy('btn-states-refresh', true, '刷新中...');
+		hint('states-hint', '已提交状态刷新，正在等待各模型独立写入缓存...', '');
+		ubus('refresh_states', { model: '', force: !!force }).then(function (r) {
+			if (r && r.ok === false) {
+				hint('states-hint', '刷新被拒绝: ' + (r.error || ''), 'err');
+				statesRefreshing = false;
+				setBusy('btn-states-refresh', false, '刷新状态');
+				return;
+			}
+			var tries = 0;
+			var tick = function () {
+				tries++;
+				loadStates().then(function () {
+					if (tries >= 4) {
+						statesRefreshing = false;
+						setBusy('btn-states-refresh', false, '刷新状态');
+						applyMobileSections();
+						return;
+					}
+					setTimeout(tick, 2000);
+				});
+			};
+			setTimeout(tick, 1800);
+		}).catch(function (e) {
+			hint('states-hint', '刷新请求失败: ' + e.message, 'err');
+			statesRefreshing = false;
+			setBusy('btn-states-refresh', false, '刷新状态');
+		});
+	}
+
+	/* ---------------- 诊断工具（v2.6） ---------------- */
+
+	// 从当前表单取仓库地址：通用地址 > 旧 owner/repo > 粘贴的完整 URL
+	function currentRepoSpec() {
+		var ids = ['cfg-repo-url', 'cfg-repo', 'cfg-url'];
+		for (var i = 0; i < ids.length; i++) {
+			var el = $(ids[i]);
+			if (el && el.value.trim()) return el.value.trim();
+		}
+		return '';
+	}
+
+	function probeRepo() {
+		var repo = currentRepoSpec();
+		if (!repo) { hint('states-hint', '请先在「仓库配置」中填写仓库地址', 'err'); return; }
+		setBusy('btn-probe-repo', true, '校验中...');
+		hint('states-hint', '正在校验仓库地址并读取公开信息...', '');
+		ubus('probe_repo', { repo: repo }).then(function (r) {
+			if (r && r.ok) {
+				var meta = r.repo || {};
+				var wf = (r.workflows && r.workflows.length) || 0;
+				hint('states-hint', '仓库可用：' + esc(meta.slug || (r.parsed && r.parsed.slug) || repo) +
+					(meta.default_branch ? (' · 默认分支 ' + esc(meta.default_branch)) : '') +
+					' · 发现 ' + wf + ' 个公开 Workflow', 'ok');
+			} else {
+				hint('states-hint', '仓库校验失败：' + esc((r && r.error) || '未知错误'), 'err');
+			}
+		}).catch(function (e) {
+			hint('states-hint', '仓库校验请求失败: ' + e.message, 'err');
+		}).then(function () {
+			setBusy('btn-probe-repo', false, '校验仓库');
+		});
+	}
+
+	function runNetcheck() {
+		setBusy('btn-netcheck', true, '检测中...');
+		hint('states-hint', '正在执行真实 HTTP 连通性探测...', '');
+		ubus('netcheck', { force: true }).then(function (r) {
+			var ok = r && (r.class === 'ok' || r.label === '正常');
+			hint('states-hint', '网络检测：' + esc((r && r.label) || '未知') +
+				' — ' + esc((r && r.detail) || '') +
+				((r && r.http_status) ? (' (HTTP ' + r.http_status + ')') : ''), ok ? 'ok' : 'err');
+			loadStates();
+		}).catch(function (e) {
+			hint('states-hint', '网络检测请求失败: ' + e.message, 'err');
+		}).then(function () {
+			setBusy('btn-netcheck', false, '网络检测');
+		});
+	}
+
+	function clearStatesCache() {
+		setBusy('btn-clear-states', true, '清理中...');
+		ubus('clear_states_cache').then(function (r) {
+			hint('states-hint', '已清空 ' + ((r && r.cleared) || 0) +
+				' 份状态缓存；固件文件、任务历史与运行日志不受影响', 'ok');
+			loadStates();
+		}).catch(function (e) {
+			hint('states-hint', '清空缓存失败: ' + e.message, 'err');
+		}).then(function () {
+			setBusy('btn-clear-states', false, '清空状态缓存');
+		});
+	}
+
+	/* ---------------- 手机端信息密度 ---------------- */
+
+	// 手机端默认收起下载任务、备份、仓库配置与运行日志，只保留标题和展开入口。
+	// 桌面端完全不受影响；按钮由 JS 动态插入，模板里不增加额外结构。
+	var MOBILE_MQ = window.matchMedia('(max-width: 760px)');
+	var MOBILE_SECTIONS = [
+		['card-states', '远程状态与诊断'],
+		['card-backup', '备份与恢复'],
+		['card-config', '仓库配置'],
+		['card-log', '运行日志']
+	];
+
+	function applyMobileSections() {
+		MOBILE_SECTIONS.forEach(function (item) {
+			var card = $(item[0]);
+			if (!card) return;
+			var head = card.querySelector('.ou-card-head');
+			var btn = card.querySelector('.ou-mobile-toggle');
+			if (!btn && head) {
+				btn = document.createElement('button');
+				btn.type = 'button';
+				btn.className = 'ou-mobile-toggle';
+				card.insertBefore(btn, head.nextSibling);
+				btn.addEventListener('click', function () {
+					var collapsed = card.classList.toggle('ou-mobile-collapsed');
+					card.setAttribute('data-mobile-expanded', collapsed ? '0' : '1');
+					btn.textContent = (collapsed ? '展开' : '收起') + item[1];
+				});
+			}
+			if (!btn) return;
+			if (!MOBILE_MQ.matches) {
+				card.classList.remove('ou-mobile-collapsed');
+				btn.style.display = 'none';
+				return;
+			}
+			btn.style.display = '';
+			var expanded = card.getAttribute('data-mobile-expanded') === '1';
+			card.classList.toggle('ou-mobile-collapsed', !expanded);
+			btn.textContent = (expanded ? '收起' : '展开') + item[1];
+		});
+	}
+
+	if (MOBILE_MQ.addEventListener) {
+		MOBILE_MQ.addEventListener('change', applyMobileSections);
+	} else if (MOBILE_MQ.addListener) {
+		MOBILE_MQ.addListener(applyMobileSections);
+	}
+
+	// 插件更新卡在 PC 与手机都默认折叠；展开后显示操作按钮、版本元信息与更新规范。
+	function setupPluginCollapse() {
+		var card = $('card-plugin');
+		var btn = $('plugin-toggle');
+		if (!card || !btn) return;
+		var label = btn.querySelector('span');
+		var apply = function (collapsed) {
+			card.classList.toggle('ou-card-collapsed', collapsed);
+			btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+			if (label) label.textContent = collapsed ? '展开插件更新' : '收起插件更新';
+		};
+		apply(true);
+		btn.addEventListener('click', function () {
+			apply(!card.classList.contains('ou-card-collapsed'));
+		});
+	}
+
+	/* ---------------- 初始化 ---------------- */
+
+	function boot() {
+		window.H5000MOTA.init(ubus, function () {
+			lastCheck = null;
+			return ubus('get_config').then(function (r) { fillConfig(r.settings || {}); runCheck(); });
+		});
+		$('btn-check').addEventListener('click', runCheck);
+
+	// Token 默认掩码显示，可临时切换为明文核对。
+	(function () {
+		var btn = $('btn-toggle-token'), field = $('cfg-token');
+		if (!btn || !field) return;
+		btn.addEventListener('click', function () {
+			var show = field.type === 'password';
+			field.type = show ? 'text' : 'password';
+			btn.textContent = show ? '隐藏' : '显示';
+		});
+	})();
+		$('btn-upgrade').addEventListener('click', function () { startUpgrade(false); });
+		$('btn-force').addEventListener('click', function () { startUpgrade(true); });
+		$('btn-backup').addEventListener('click', runBackup);
+		$('btn-download').addEventListener('click', downloadBackup);
+		$('btn-auto-restore').addEventListener('click', autoRestore);
+		$('btn-manual-restore').addEventListener('click', manualRestorePick);
+		$('manual-backup-file').addEventListener('change', manualRestoreUpload);
+		$('btn-parse-url').addEventListener('click', parseUrl);
+		$('btn-fetch-assets').addEventListener('click', fetchAssets);
+		$('cfg-asset').addEventListener('change', onAssetSelected);
+		$('btn-apply-asset').addEventListener('click', applyAsset);
+		$('btn-save-config').addEventListener('click', saveConfig);
+		$('btn-refresh-log').addEventListener('click', refreshLog);
+		$('btn-clear-log').addEventListener('click', clearLog);
+		$('btn-start-download').addEventListener('click', startDownload);
+		$('btn-pause-download').addEventListener('click', function () { taskCommand('pause_download', '暂停'); });
+		$('btn-resume-download').addEventListener('click', function () { taskCommand('resume_download', '继续'); });
+		$('btn-cancel-download').addEventListener('click', function () { taskCommand('cancel_download', '取消'); });
+		$('btn-reload').addEventListener('click', function () { location.reload(); });
+		$('btn-plugin-check').addEventListener('click', runPluginCheck);
+		$('btn-plugin-update').addEventListener('click', runPluginUpdate);
+		$('btn-plugin-reload').addEventListener('click', function () { location.reload(); });
+		$('evidence-toggle').addEventListener('click', function () {
+			setEvidenceExpanded(!$('check-evidence').classList.contains('is-open'));
+		});
+		// 四套状态模型 / 诊断层：只读加载缓存，刷新走独立 detached 命令
+		$('btn-states-refresh') && $('btn-states-refresh').addEventListener('click', function () { refreshStates(false); });
+		$('btn-states-reload') && $('btn-states-reload').addEventListener('click', function () { loadStates(); });
+		$('btn-probe-repo') && $('btn-probe-repo').addEventListener('click', probeRepo);
+		$('btn-netcheck') && $('btn-netcheck').addEventListener('click', runNetcheck);
+		$('btn-clear-states') && $('btn-clear-states').addEventListener('click', clearStatesCache);
+		bindDialog();
+		applyMobileSections();
+		setupPluginCollapse();
+
+		document.querySelectorAll('.ou-quick-pill').forEach(function (pill) {
+			pill.addEventListener('click', function () {
+				var p = this.getAttribute('data-proxy');
+				$('cfg-proxy').value = p;
+				hint('config-hint', p ? ('已填入代理节点: ' + p) : '已切换为 GitHub 直连模式', 'ok');
+			});
+		});
+
+		refreshLog();
+		// 只读取缓存，不发起 GitHub 请求；避免与其它初始化请求叠加触发限流
+		loadStates();
+
+		ubus('get_sysinfo').then(renderSysinfo).catch(function () { setText('cur-ver', '读取失败'); });
+		ubus('get_config').then(function (r) { fillConfig(r.settings || {}); }).catch(function (e) {
+			hint('config-hint', ' 读取配置失败: ' + e.message, 'err');
+		});
+		refreshBackups();
+		refreshTasks();
+
+		// 若已有任务在运行（例如升级途中刷新了页面），恢复对应的界面状态
+		ubus('get_status').then(function (st) {
+			if (st.stage === 'idle' || st.stage === 'check_done' || st.stage === 'check_failed') {
+				if (st.stage === 'check_done' && st.result) renderCheckResult(st.result);
+				return;
+			}
+			if (st.stage === 'flashing') { showRebootOverlay(); return; }
+			if (st.stage === 'downloading' || st.stage === 'paused' || st.stage === 'downloaded' ||
+				st.stage === 'saving' || st.stage === 'backing_up' || st.stage === 'backup_done') {
+				renderProgress(st);
+				pollUpgrade();
+			}
+		}).catch(function () {});
+	}
+
+	if (document.readyState === 'loading')
+		document.addEventListener('DOMContentLoaded', boot);
+	else
+		boot();
+})();
