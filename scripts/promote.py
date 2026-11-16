@@ -66,7 +66,7 @@ def main():
         body.write_text(
             f"H5000M 稳定版 · {item['driver']} · {item['variant']}\n\n"
             f"来源：{item['release_url']}\n\n{args.notes}\n\n"
-            f"内核版本：{item['kernel']}\n风扇插件：{item['fan']}\n\n"
+            f"内核版本：{item['kernel']}\n风扇插件：{item['fan']}\nOTA 客户端：{item['ota_client_commit']}\n\n"
             f"```\n{item['sha256']}  {item['asset']}\n```\n\n"
             f"<!-- h5000m-ota:{json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))} -->\n"
         )

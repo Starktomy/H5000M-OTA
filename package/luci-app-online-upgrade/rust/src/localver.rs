@@ -306,6 +306,17 @@ fn anchor_trust(anchor: &Version, build: Option<(i64, u32, u32)>) -> (u8, String
 /// `target` 是本次比较的云端目标版本；不需要比较时可传 `None`，
 /// 此时不做锚点过期交叉核对，仅按来源优先级与日期窗口判定。
 pub fn detect_with_target(target: Option<&Version>) -> LocalVersion {
+    // 普通配置备份可能带回旧锚点；本次固件内置的完整构建时间优先。
+    if let Some(version) = crate::h5000m::current_version() {
+        return LocalVersion {
+            raw: version.as_display(), version: Some(version),
+            source: "h5000m_firmware_identity".into(),
+            source_text: "当前固件内置构建标识 /usr/share/h5000m/firmware.json".into(),
+            confidence: Confidence::Strong, build_ymd: None, basis_score: 100,
+            evidence: vec!["使用当前镜像的完整构建时间，包含时分秒".into()],
+            advice: String::new(),
+        };
+    }
     let rel = read_file("/etc/openwrt_release").unwrap_or_default();
     let osrel = read_file("/etc/os-release").unwrap_or_default();
 

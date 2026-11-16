@@ -77,6 +77,7 @@ def entry(repo, release, driver, variant, version, channel):
     datetime.fromisoformat(published.replace("Z", "+00:00"))
     kernel = re.search(r"内核版本[：:]\s*(\S+)", body)
     fan = re.search(r"风扇插件[：:]\s*([^\n]+)", body)
+    client = re.search(r"OTA 客户端[：:]\s*([0-9a-f]{40})(?:\s|$)", body)
     return {
         "id": f"{channel}:{driver}:{variant}:{tag}",
         "device": DEVICE, "driver": driver, "variant": variant, "channel": channel,
@@ -84,6 +85,7 @@ def entry(repo, release, driver, variant, version, channel):
         "asset": asset["name"], "size": asset["size"], "sha256": sha256, "url": url,
         "release_url": f"https://github.com/{repo}/releases/tag/{tag}",
         "kernel": kernel[1] if kernel else "", "fan": fan[1].strip() if fan else "",
+        "ota_client_commit": client[1] if client else "",
     }
 
 

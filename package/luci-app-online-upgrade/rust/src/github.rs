@@ -787,13 +787,17 @@ pub async fn check(client: &reqwest::Client) -> Value {
 
     let name_hit = crate::version::pick_best(&file_name);
     let tag_hit = crate::version::pick_best(&resolved_tag);
-    let (fw_version, version_source) = match name_hit.as_ref() {
+    // H5000M 文件名只有日期；已知发布标签包含完整构建时间，应以标签为准。
+    let h5000m_version = crate::h5000m::release_version(&cfg.repo, &resolved_tag, &file_name);
+    let (fw_version, version_source) = if let Some(version) = &h5000m_version {
+        (version.as_display(), "tag")
+    } else { match name_hit.as_ref() {
         Some(hit) => (hit.version.as_display(), "filename"),
         None => match tag_hit.as_ref() {
             Some(hit) => (hit.version.as_display(), "tag"),
             None => (String::new(), "none"),
         },
-    };
+    }};
     // 辅助特征：Release 标签与资产名解析出的版本是否描述同一个版本。
     // 不一致时仍以资产名为准，但把分歧显式写进结果与日志，供人工核对。
     let tag_version = tag_hit
@@ -813,7 +817,7 @@ pub async fn check(client: &reqwest::Client) -> Value {
         .map(|h| h.fragment.clone())
         .unwrap_or_default();
     let (cur_id, cur_release, cur_revision) = read_distrib();
-    let target_ver = crate::version::pick(&fw_version);
+    let target_ver = h5000m_version.or_else(|| crate::version::pick(&fw_version));
     // 本机版本按可信度逐级探测（自用 SNAPSHOT 构建会退到构建时间）。
     let local = crate::localver::detect_with_target(target_ver.as_ref());
     let local_ver = local.comparable(target_ver.as_ref());

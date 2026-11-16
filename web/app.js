@@ -13,6 +13,7 @@
       append(card, 'h2', e.version);
       append(card, 'p', new Date(e.published_at).toLocaleString('zh-CN') + ' · ' + (e.size / 1048576).toFixed(1) + ' MB' + (e.kernel ? ' · 内核 ' + e.kernel : ''));
       if (e.fan) append(card, 'p', '风扇：' + e.fan);
+      if (!e.ota_client_commit) append(card, 'p', '早期构建：未内置本次统一 OTA 客户端。');
       var url = 'https://github.com/' + e.repo + '/releases/download/' + e.tag + '/' + e.asset;
       if (e.url === url && /^Starktomy\/(OpenWRT-CI-H5000M|CloseWRT-CI-H5000M|H5000M-OTA)$/.test(e.repo)) {
         var download = append(card, 'a', '下载 sysupgrade 固件'); download.href = url; download.className = 'download';

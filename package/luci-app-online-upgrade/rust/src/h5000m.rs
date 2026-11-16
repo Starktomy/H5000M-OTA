@@ -42,6 +42,28 @@ pub fn current() -> Option<Identity> {
     Identity::from_value(&json::parse(&data).ok()?)
 }
 
+pub fn timestamp_version(stamp: &str) -> Option<crate::version::Version> {
+    if !Regex::new(r"^[0-9]{2}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}\.[0-9]{2}\.[0-9]{2}$").ok()?.is_match(stamp) {
+        return None;
+    }
+    let nums: Vec<u64> = stamp.split(['.', '-']).map(str::parse).collect::<Result<_, _>>().ok()?;
+    if !(1..=12).contains(&nums[1]) || !(1..=31).contains(&nums[2])
+        || nums[3] > 23 || nums[4] > 59 || nums[5] > 59 { return None; }
+    Some(crate::version::Version { nums, pre: None, build: None, raw: stamp.into() })
+}
+
+pub fn current_version() -> Option<crate::version::Version> {
+    let data = std::fs::read_to_string(IDENTITY_PATH).ok()?;
+    let value = json::parse(&data).ok()?;
+    Identity::from_value(&value)?;
+    timestamp_version(text(&value, "version"))
+}
+
+pub fn release_version(repo: &str, tag: &str, asset: &str) -> Option<crate::version::Version> {
+    release_identity(repo, tag, asset)?;
+    timestamp_version(tag.get(tag.len().checked_sub(17)?..)?)
+}
+
 pub fn release_identity(repo: &str, tag: &str, asset: &str) -> Option<Identity> {
     let stamp = r"[0-9]{2}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}\.[0-9]{2}\.[0-9]{2}";
     for variant in VARIANTS {
@@ -244,5 +266,17 @@ mod tests {
         ] {
             assert!(validate_entry(&json::parse(&changed).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn full_build_time_distinguishes_same_day_releases_and_stable_copies() {
+        let older = timestamp_version("26.11.16-08.00.00").unwrap();
+        let newer = timestamp_version("26.11.16-22.00.00").unwrap();
+        assert_eq!(older.compare(&newer), std::cmp::Ordering::Less);
+        let asset = "H5000M-qmodem-next-20261116-sysupgrade.bin";
+        let original = release_version("Starktomy/OpenWRT-CI-H5000M", "H5000M-qmodem-next-immortalwrt-master-26.11.16-08.00.00", asset).unwrap();
+        let stable = release_version("Starktomy/H5000M-OTA", "stable-mt76-qmodem-next-26.11.16-08.00.00", asset).unwrap();
+        assert_eq!(original.compare(&stable), std::cmp::Ordering::Equal);
+        assert!(timestamp_version("26.11.16-99.00.00").is_none());
     }
 }

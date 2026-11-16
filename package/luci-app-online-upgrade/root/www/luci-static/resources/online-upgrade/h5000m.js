@@ -35,7 +35,7 @@
 				? '当前：' + drivers[policy.current.driver] + ' · ' + variants[policy.current.variant]
 				: '当前：旧固件或身份未知';
 			$('ota-detail').textContent = entry
-				? entry.version + ' · ' + (entry.size / 1048576).toFixed(1) + ' MB' + (entry.kernel ? ' · 内核 ' + entry.kernel : '')
+				? entry.version + ' · ' + (entry.size / 1048576).toFixed(1) + ' MB' + (entry.kernel ? ' · 内核 ' + entry.kernel : '') + (entry.ota_client_commit ? '' : ' · 早期构建，未内置统一 OTA 客户端')
 				: '此驱动、方案与发布通道暂时没有可用固件。';
 			var link = $('ota-release');
 			link.hidden = !entry; link.href = entry ? entry.release_url : '#';

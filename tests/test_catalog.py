@@ -28,6 +28,12 @@ def build(variant="qmodem-next", day=1, driver="mt76"):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_new_client_is_identified_without_mislabeling_early_builds(self):
+        repo, release = build()
+        self.assertEqual(catalog.parse_development(repo, release)["ota_client_commit"], "")
+        release["body"] += "\nOTA 客户端：" + "c" * 40 + "\n"
+        self.assertEqual(catalog.parse_development(repo, release)["ota_client_commit"], "c" * 40)
+
     def test_ten_groups_are_limited_to_three(self):
         repos = {repo: [] for repo in catalog.SOURCES}
         for driver in ("mt76", "mt_wifi7"):
