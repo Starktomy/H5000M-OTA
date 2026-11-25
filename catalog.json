@@ -8,6 +8,25 @@
   "keep_config_policy": "same_driver_and_variant",
   "entries": [
     {
+      "id": "development:mt_wifi7:qmodem:H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.25-11.58.58",
+      "device": "hiveton,h5000m",
+      "driver": "mt_wifi7",
+      "variant": "qmodem",
+      "channel": "development",
+      "version": "26.11.25-11.58.58",
+      "published_at": "2026-11-25T04:39:41Z",
+      "repo": "Starktomy/CloseWRT-CI-H5000M",
+      "tag": "H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.25-11.58.58",
+      "asset": "H5000M-qmodem-20261125-sysupgrade.bin",
+      "size": 74588432,
+      "sha256": "7602f60d0aa3bfb3406e903e095c7f5a91f6a2b4c0cfcfc7d5df1117fde15476",
+      "url": "https://github.com/Starktomy/CloseWRT-CI-H5000M/releases/download/H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.25-11.58.58/H5000M-qmodem-20261125-sysupgrade.bin",
+      "release_url": "https://github.com/Starktomy/CloseWRT-CI-H5000M/releases/tag/H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.25-11.58.58",
+      "kernel": "6.12.116",
+      "fan": "FAN789/luci-app-h5000m-fancontrol 2.1.3",
+      "ota_client_commit": "4ab856bc4463bf20b8da45485a1840b5b0d7fc36"
+    },
+    {
       "id": "development:mt_wifi7:qmodem-next:H5000M-qmodem-next-chasey-dev-25.12-dev-wifi7-26.11.25-11.59.12",
       "device": "hiveton,h5000m",
       "driver": "mt_wifi7",
@@ -557,26 +576,7 @@
       "kernel": "6.18.60",
       "fan": "FAN789/luci-app-h5000m-fancontrol 2.1.3",
       "ota_client_commit": "485fda23e9675ce1bdcc4e0e116539b371055278"
-    },
-    {
-      "id": "development:mt_wifi7:qmodem:H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.19-10.15.13",
-      "device": "hiveton,h5000m",
-      "driver": "mt_wifi7",
-      "variant": "qmodem",
-      "channel": "development",
-      "version": "26.11.19-10.15.13",
-      "published_at": "2026-11-19T02:50:36Z",
-      "repo": "Starktomy/CloseWRT-CI-H5000M",
-      "tag": "H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.19-10.15.13",
-      "asset": "H5000M-qmodem-20261119-sysupgrade.bin",
-      "size": 74516752,
-      "sha256": "02f1a1b710e58710093ce8e629129c1452e86b0f29fe24f4437d63081f2d7934",
-      "url": "https://github.com/Starktomy/CloseWRT-CI-H5000M/releases/download/H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.19-10.15.13/H5000M-qmodem-20261119-sysupgrade.bin",
-      "release_url": "https://github.com/Starktomy/CloseWRT-CI-H5000M/releases/tag/H5000M-qmodem-chasey-dev-25.12-dev-wifi7-26.11.19-10.15.13",
-      "kernel": "6.12.116",
-      "fan": "FAN789/luci-app-h5000m-fancontrol 2.1.3",
-      "ota_client_commit": "255d0fb6d8495471f3aeea2692dfd531677e1a13"
     }
   ],
-  "generated_at": "2026-11-25T04:38:19+00:00"
+  "generated_at": "2026-11-25T15:02:08+00:00"
 }
